@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 
-from agents.search_providers.base import QuotaExhaustedError, infer_company_from_result, is_quota_message, profile_location_hint
+from agents.search_providers.base import QuotaExhaustedError, RateLimitError, infer_company_from_result, is_quota_message, profile_location_hint
 
 SERPAPI_ENDPOINT = "https://serpapi.com/search.json"
 
@@ -40,7 +40,7 @@ class SerpApiProvider:
         response = await client.get(SERPAPI_ENDPOINT, params=params)
 
         if response.status_code == 429:
-            raise QuotaExhaustedError("SerpApi rate limit (429)")
+            raise RateLimitError("SerpApi rate limit (429)")
 
         payload = response.json()
         error = payload.get("error")

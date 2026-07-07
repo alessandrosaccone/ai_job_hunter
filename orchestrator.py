@@ -19,7 +19,7 @@ from agents.search_providers.router import JobSearchRouter
 from agents.startup_discoverer import StartupDiscoverer
 from agents.target_hunter import TargetHunter
 from models.job import JobPosting, MatchResult, ScanResult
-from models.user_profile import UserProfile
+from models.user_profile import UserProfile, read_uses_web_search
 from storage.discovered_companies import DiscoveredCompaniesStore
 from storage.memory import JobMemory
 from storage.scan_history import ScanHistoryStore
@@ -95,12 +95,20 @@ class JobHunterOrchestrator:
         persisted_discovered = discovered_store.load() if discovered_store else []
 
         async def run_startup_discoverer() -> list[JobPosting]:
+            if not read_uses_web_search(profile):
+                self._emit(
+                    on_progress,
+                    "agent_done",
+                    {"agent": "Startup Discoverer", "count": 0, "skipped": True},
+                )
+                return []
+
             self._emit(
                 on_progress,
                 "status",
-                {"message": "Startup Discoverer in esecuzione..."},
+                {"message": "Startup Discoverer in esecuzione (ricerche web)..."},
             )
-            jobs = await self.startup_discoverer.safe_run(profile)
+            jobs = await self.startup_discoverer.safe_run(profile, on_progress=on_progress)
             self._emit(
                 on_progress,
                 "agent_done",
@@ -134,22 +142,30 @@ class JobHunterOrchestrator:
             run_target_hunter(),
         )
 
-        self._emit(
-            on_progress,
-            "search_providers",
-            {
-                "phase": "discovery",
-                "stats": self.search_router.get_usage_stats(),
-            },
-        )
+        if read_uses_web_search(profile):
+            self._emit(
+                on_progress,
+                "search_providers",
+                {
+                    "phase": "discovery",
+                    "stats": self.search_router.get_usage_stats(),
+                },
+            )
 
-        known_companies = self._all_known_companies(profile)
-        newly_verified = await discover_and_verify_companies(
-            startup_jobs,
-            profile,
-            known_companies,
-            self.target_hunter,
-        )
+            known_companies = self._all_known_companies(profile)
+            newly_verified = await discover_and_verify_companies(
+                startup_jobs,
+                profile,
+                known_companies,
+                self.target_hunter,
+            )
+        else:
+            self._emit(
+                on_progress,
+                "status",
+                {"message": "Modalità senza ricerche web: salto discovery ATS dinamica."},
+            )
+            newly_verified = []
 
         dynamic_jobs: list[JobPosting] = []
         if newly_verified:

@@ -9,7 +9,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from models.job import MatchResult, ScanResult
-from models.user_profile import ExperienceLevelRule, FundamentalCriteria, UserProfile
+from models.user_profile import ExperienceLevelRule, FundamentalCriteria, UserProfile, read_search_mode
 from orchestrator import run_scan_sync
 from storage.memory import JobMemory
 from storage.profile_registry import (
@@ -22,7 +22,7 @@ from storage.profile_registry import (
 )
 from agents.job_listing_expander import match_salary_sort_key
 from agents.search_providers.router import JobSearchRouter
-from storage.search_quota import exhausted_providers
+from storage.search_quota import clear_provider_exhausted, exhausted_providers
 from storage.saved_jobs import SavedJobsStore
 from storage.scan_history import ROME, ScanHistoryStore, format_italian_date
 
@@ -45,6 +45,10 @@ EXPERIENCE_LEVEL_RULE_OPTIONS = [
     ("all_lower", "Questo livello o inferiori"),
     ("or_lower", "Questo livello o X inferiori"),
     ("or_higher", "Questo livello o X superiori"),
+]
+SEARCH_MODE_OPTIONS = [
+    ("full", "Completa — Target Hunter + ricerche web (Startup Discoverer, RAL)"),
+    ("no_search", "Senza ricerche web — solo API ATS (Lever/Greenhouse) + AI"),
 ]
 MATCH_SORT_OPTIONS = [
     ("match_desc", "Punteggio match (migliori prima)"),
@@ -231,11 +235,11 @@ def _render_profile_selector() -> ProfilePaths:
 def _load_profile_for_form(paths: ProfilePaths) -> UserProfile:
     profile = UserProfile.load(paths.profile_path)
     if profile:
-        return profile
+        return UserProfile.model_validate(profile.model_dump())
 
     example = UserProfile.load(EXAMPLE_PROFILE_PATH)
     if example:
-        return example
+        return UserProfile.model_validate(example.model_dump())
 
     return UserProfile(
         career_field="tech",
@@ -395,6 +399,26 @@ def render_profile_tab(paths: ProfilePaths) -> None:
         )
         free_text = st.text_area("Preferenze libere", value=current.free_text_preferences, height=120)
 
+        st.markdown("### Modalità scansione")
+        search_mode_keys = [key for key, _ in SEARCH_MODE_OPTIONS]
+        search_mode_labels = [label for _, label in SEARCH_MODE_OPTIONS]
+        current_mode = read_search_mode(current)
+        search_mode_index = (
+            search_mode_keys.index(current_mode)
+            if current_mode in search_mode_keys
+            else 0
+        )
+        selected_search_label = st.radio(
+            "Ricerche web",
+            options=search_mode_labels,
+            index=search_mode_index,
+            help=(
+                "Senza ricerche web: niente Startup Discoverer, niente ricerca RAL online. "
+                "Usa solo annunci dalle API ATS delle aziende target (e board già scoperte)."
+            ),
+        )
+        selected_search_mode = search_mode_keys[search_mode_labels.index(selected_search_label)]
+
         st.markdown("### Criteri rilevanti")
         st.caption(
             "Criteri che scartano a priori le candidature se non vengono soddisfatti esattamente, "
@@ -478,6 +502,7 @@ def render_profile_tab(paths: ProfilePaths) -> None:
                 mode=level_rule_mode,  # type: ignore[arg-type]
                 offset=level_rule_offset,
             ),
+            search_mode=selected_search_mode,  # type: ignore[arg-type]
         )
         profile.save(paths.profile_path)
         st.success(f"Profilo «{paths.display_name}» salvato.")
@@ -489,6 +514,20 @@ def _card_key(result: MatchResult, prefix: str, suffix: str = "") -> str:
     if suffix:
         parts.append(suffix)
     return "-".join(parts)
+
+
+@st.fragment
+def _render_save_button(
+    result: MatchResult,
+    saved_store: SavedJobsStore,
+    *,
+    key: str,
+) -> None:
+    if saved_store.is_saved(result.job.dedup_key):
+        st.button("Salvata", disabled=True, use_container_width=True, key=f"saved-{key}")
+    elif st.button("Salva candidatura", use_container_width=True, key=f"save-{key}"):
+        saved_store.add(result)
+        st.toast(f"Salvata: {result.job.title} @ {result.job.company}")
 
 
 def _render_match_card(
@@ -553,12 +592,7 @@ def _render_match_card(
         )
     with action_col2:
         if allow_save and saved_store is not None:
-            if saved_store.is_saved(result.job.dedup_key):
-                st.button("Salvata", disabled=True, use_container_width=True, key=f"saved-{key}")
-            elif st.button("Salva candidatura", use_container_width=True, key=f"save-{key}"):
-                saved_store.add(result)
-                st.toast(f"Salvata: {result.job.title} @ {result.job.company}")
-                st.rerun()
+            _render_save_button(result, saved_store, key=key)
     with st.expander("Motivazione AI", expanded=False, key=f"reason-{key}"):
         st.write(result.reasoning)
 
@@ -600,9 +634,27 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
             status_box.info(payload["message"])
             append_log(payload["message"])
         elif event == "agent_done":
-            message = f"{payload['agent']}: {payload['count']} annunci"
+            if payload.get("skipped"):
+                message = f"{payload['agent']}: saltato (modalità senza ricerche web)"
+            else:
+                message = f"{payload['agent']}: {payload['count']} annunci"
             append_log(message)
             status_box.info(message)
+        elif event == "startup_search":
+            current = payload["current"]
+            total = max(payload["total"], 1)
+            progress_bar.progress(
+                current / total * 0.35,
+                text=(
+                    f"Ricerche web {current}/{total} · "
+                    f"{payload.get('items_found', 0)} risultati raccolti"
+                ),
+            )
+            if current == 1 or current == total or current % 3 == 0:
+                append_log(
+                    f"Startup Discoverer: ricerca {current}/{total} "
+                    f"({payload.get('items_found', 0)} risultati)"
+                )
         elif event == "summary":
             totals["found"] = payload["total_found"]
             totals["new"] = payload["new_jobs"]
@@ -628,6 +680,12 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
             totals["promoted"] = len(live_matches)
             refresh_metrics()
             append_log(f"PROMOSSO [{result.match_score:.1f}] {result.job.title} @ {result.job.company}")
+            st.session_state["live_matches"] = [
+                match.model_dump(mode="json") for match in live_matches
+            ]
+            cached = ScanResult.load(paths.scan_results_path)
+            if cached:
+                st.session_state["last_scan_result"] = cached.model_dump(mode="json")
             with results_container:
                 _render_match_card(
                     result,
@@ -687,7 +745,14 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
     except Exception as exc:
         status_box.error(f"Scansione fallita: {exc}")
         append_log(f"ERRORE: {exc}")
-        return None
+        cached = ScanResult.load(paths.scan_results_path)
+        if cached:
+            st.session_state["last_scan_result"] = cached.model_dump(mode="json")
+        if live_matches:
+            st.session_state["live_matches"] = [
+                match.model_dump(mode="json") for match in live_matches
+            ]
+        return cached
 
 
 def render_saved_tab(paths: ProfilePaths) -> None:
@@ -853,19 +918,26 @@ def render_dashboard_tab(paths: ProfilePaths) -> None:
         return
 
     field_label = CAREER_FIELDS.get(profile.career_field, {}).get("label", profile.career_field)
+    mode_label = next(
+        (label for key, label in SEARCH_MODE_OPTIONS if key == read_search_mode(profile)),
+        read_search_mode(profile),
+    )
     st.caption(
         f"Profilo: **{paths.display_name}** · Campo: **{field_label}** · "
-        f"Livello: **{profile.experience_level}** · {profile.location}"
+        f"Livello: **{profile.experience_level}** · {profile.location} · "
+        f"Modalità: **{mode_label.split(' — ')[0]}**"
     )
 
     saved_store = _saved_store(paths)
 
-    scan_running = st.session_state.get("scan_running", False)
-    if st.button("Avvia Scansione", type="primary", use_container_width=True, disabled=scan_running):
-        st.session_state["scan_running"] = True
+    if st.button(
+        "Avvia Scansione",
+        type="primary",
+        use_container_width=True,
+        key=f"start-scan-{paths.slug}",
+    ):
         st.session_state["live_matches"] = []
         _run_live_scan(profile, paths)
-        st.session_state["scan_running"] = False
 
     scan_data = st.session_state.get("last_scan_result")
     if not scan_data:
@@ -946,7 +1018,16 @@ def main() -> None:
         exhausted = exhausted_providers()
         if exhausted:
             labels = ", ".join(name.capitalize() for name in exhausted)
-            st.caption(f"Quota esaurita questo mese: {labels}")
+            st.caption(f"Segnati esauriti (quota mensile): {labels}")
+            if st.button(
+                "Reset quota provider",
+                use_container_width=True,
+                help="Usa se hai ricaricato i crediti o erano falsi positivi da rate limit.",
+            ):
+                clear_provider_exhausted(None)
+                st.toast("Quota provider resettata.")
+                st.rerun()
+        st.caption("429 = rate limit temporaneo (non blocca il mese). Quota mensile solo su 402/crediti finiti.")
         st.caption("Fallback: DuckDuckGo → DeepSeek web")
         st.caption(f"Modello: {os.getenv('DEEPSEEK_MODEL', 'deepseek-chat')}")
 

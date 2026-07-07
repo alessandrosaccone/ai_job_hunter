@@ -25,6 +25,7 @@ ExperienceLevel = Literal[
     "manager",
 ]
 ExperienceLevelMode = Literal["exact", "or_higher", "all_lower", "or_lower"]
+SearchMode = Literal["full", "no_search"]
 
 LEVEL_ORDER: list[ExperienceLevel] = [
     "internship",
@@ -72,6 +73,15 @@ def allowed_experience_levels(
     return {LEVEL_ORDER[i] for i in indices}
 
 
+def read_search_mode(profile: UserProfile) -> SearchMode:
+    mode = profile.model_dump().get("search_mode", "full")
+    return mode if mode in {"full", "no_search"} else "full"
+
+
+def read_uses_web_search(profile: UserProfile) -> bool:
+    return read_search_mode(profile) == "full"
+
+
 class UserProfile(BaseModel):
     career_field: CareerField = "tech"
     experience_level: ExperienceLevel = "mid"
@@ -84,6 +94,10 @@ class UserProfile(BaseModel):
     free_text_preferences: str = ""
     fundamental_criteria: FundamentalCriteria = Field(default_factory=FundamentalCriteria)
     experience_level_rule: ExperienceLevelRule = Field(default_factory=ExperienceLevelRule)
+    search_mode: SearchMode = "full"
+
+    def uses_web_search(self) -> bool:
+        return read_uses_web_search(self)
 
     def location_places(self) -> list[str]:
         return [place.strip() for place in self.location.split(",") if place.strip()]
@@ -115,6 +129,8 @@ class UserProfile(BaseModel):
             return None
         with profile_path.open(encoding="utf-8") as handle:
             data = json.load(handle)
+        if "search_mode" not in data:
+            data["search_mode"] = "full"
         return cls.model_validate(data)
 
     def save(self, path: Path | str = DEFAULT_PROFILE_PATH) -> None:

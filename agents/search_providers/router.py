@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, Protocol
 
 import httpx
@@ -12,10 +13,12 @@ from agents.search_providers.dataforseo import DataForSeoProvider
 from agents.search_providers.serpapi_provider import SerpApiProvider
 from agents.search_providers.scraperapi import ScraperApiProvider
 from agents.search_providers.serper import SerperProvider
-from agents.search_providers.base import QuotaExhaustedError
+from agents.search_providers.base import QuotaExhaustedError, RateLimitError
 from storage.search_quota import is_provider_exhausted, mark_provider_exhausted
 
 logger = logging.getLogger(__name__)
+
+RATE_LIMIT_COOLDOWN_SECONDS = 120
 
 DEFAULT_PROVIDER_ORDER = (
     "serpapi",
@@ -106,6 +109,7 @@ class JobSearchRouter:
         }
         self._order = self._load_order()
         self._session_disabled: set[str] = set()
+        self._rate_limit_until: dict[str, float] = {}
         self._usage_stats: dict[str, dict[str, int]] = {}
 
     def _load_order(self) -> list[str]:
@@ -135,6 +139,15 @@ class JobSearchRouter:
             return cleaned
         return f"{cleaned[: limit - 1]}…"
 
+    def _is_rate_limited(self, provider_name: str) -> bool:
+        until = self._rate_limit_until.get(provider_name)
+        if until is None:
+            return False
+        if time.time() >= until:
+            self._rate_limit_until.pop(provider_name, None)
+            return False
+        return True
+
     async def search(
         self,
         client: httpx.AsyncClient,
@@ -154,6 +167,8 @@ class JobSearchRouter:
                 continue
             if provider_name in self._session_disabled:
                 continue
+            if self._is_rate_limited(provider_name):
+                continue
             if is_provider_exhausted(provider_name):
                 continue
 
@@ -167,11 +182,20 @@ class JobSearchRouter:
 
             try:
                 results = await provider.search(client, engine, query, location)
+            except RateLimitError as exc:
+                stats["fail"] += 1
+                self._rate_limit_until[provider_name] = time.time() + RATE_LIMIT_COOLDOWN_SECONDS
+                logger.warning(
+                    "[%s] Rate limit temporaneo (crediti OK, troppe richieste ravvicinate): %s",
+                    label,
+                    exc,
+                )
+                continue
             except QuotaExhaustedError as exc:
                 stats["fail"] += 1
                 mark_provider_exhausted(provider_name)
                 self._session_disabled.add(provider_name)
-                logger.warning("[%s] Quota esaurita: %s", label, exc)
+                logger.warning("[%s] Quota mensile esaurita: %s", label, exc)
                 continue
             except Exception as exc:
                 stats["fail"] += 1

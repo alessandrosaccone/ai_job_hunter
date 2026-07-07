@@ -8,7 +8,11 @@ QUOTA_TOKENS = ("quota", "limit", "run out", "exhausted", "billing", "credit", "
 
 
 class QuotaExhaustedError(Exception):
-    pass
+    """Monthly/billing quota exhausted — skip provider until next month."""
+
+
+class RateLimitError(Exception):
+    """Temporary rate limit (HTTP 429 etc.) — cooldown, not permanent."""
 
 
 def is_quota_message(message: str) -> bool:

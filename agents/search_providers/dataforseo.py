@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from agents.search_providers.base import QuotaExhaustedError, infer_company_from_result, is_quota_message, organic_to_results, profile_location_hint
+from agents.search_providers.base import QuotaExhaustedError, RateLimitError, infer_company_from_result, is_quota_message, organic_to_results, profile_location_hint
 
 DATAFORSEO_ORGANIC_URL = "https://api.dataforseo.com/v3/serp/google/organic/live/regular"
 DATAFORSEO_JOBS_URL = "https://api.dataforseo.com/v3/serp/google/jobs/live/regular"
@@ -51,7 +51,9 @@ class DataForSeoProvider:
         ]
 
         response = await client.post(endpoint, headers=self._auth_header(), json=payload)
-        if response.status_code in {402, 429}:
+        if response.status_code == 429:
+            raise RateLimitError(f"DataForSEO rate limit ({response.status_code})")
+        if response.status_code == 402:
             raise QuotaExhaustedError(f"DataForSEO quota ({response.status_code})")
 
         data = response.json()

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from agents.job_prefilter import _extract_salary_range
 from agents.search_providers.router import JobSearchRouter
 from models.job import JobPosting
-from models.user_profile import UserProfile
+from models.user_profile import UserProfile, read_uses_web_search
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +98,16 @@ class SalaryResearcher:
         return self._client
 
     async def research(self, job: JobPosting, profile: UserProfile) -> SalaryResearchResult | None:
+        if not read_uses_web_search(profile):
+            result = SalaryResearchResult(
+                research_summary=(
+                    "Modalità senza ricerche web: RAL non cercata online. "
+                    "Usa la RAL indicata nell'annuncio se presente."
+                ),
+                confidence="low",
+            )
+            return result
+
         cache_key = f"{job.company.lower()}|{job.title.lower()}|{job.location.lower()}"
         if cache_key in self._cache:
             return self._cache[cache_key]

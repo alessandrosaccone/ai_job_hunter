@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 
-from agents.search_providers.base import QuotaExhaustedError, infer_company_from_result, is_quota_message, organic_to_results, profile_location_hint
+from agents.search_providers.base import QuotaExhaustedError, RateLimitError, infer_company_from_result, is_quota_message, organic_to_results, profile_location_hint
 
 APIFY_ACTOR = os.getenv("APIFY_GOOGLE_SEARCH_ACTOR", "apify~google-search-scraper")
 
@@ -35,7 +35,7 @@ class ApifyProvider:
         url = f"https://api.apify.com/v2/acts/{APIFY_ACTOR}/run-sync-get-dataset-items"
         response = await client.post(
             url,
-            params={"token": self.api_token, "timeout": 120},
+            params={"token": self.api_token, "timeout": 45},
             json={
                 "queries": query,
                 "maxPagesPerQuery": 1,
@@ -45,8 +45,13 @@ class ApifyProvider:
             },
         )
 
-        if response.status_code in {402, 429}:
-            raise QuotaExhaustedError(f"Apify quota ({response.status_code})")
+        if response.status_code == 429:
+            raise RateLimitError(f"Apify rate limit ({response.status_code})")
+        if response.status_code == 402:
+            message = response.text
+            if is_quota_message(message):
+                raise QuotaExhaustedError(f"Apify quota ({response.status_code})")
+            raise RateLimitError(f"Apify temporary limit ({response.status_code})")
 
         if response.status_code >= 400:
             message = response.text

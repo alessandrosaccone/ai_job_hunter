@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -15,14 +16,18 @@ from agents.job_listing_expander import JobListingExpander
 from agents.keyword_expander import KeywordExpander
 from agents.search_providers.router import JobSearchRouter
 from models.job import JobPosting
-from models.user_profile import UserProfile
+from models.user_profile import UserProfile, read_uses_web_search
 
 logger = logging.getLogger(__name__)
+
+ProgressCallback = Callable[[str, dict[str, Any]], None]
 
 DEFAULT_COMPANIES_PATH = Path("config/target_companies.json")
 MAX_KEYWORDS_PER_SCAN = 5
 MAX_QUERIES_PER_KEYWORD = 3
-
+MAX_CONCURRENT_SEARCHES = 4
+MAX_CONCURRENT_EXPANSIONS = 3
+MAX_LISTING_EXPANSIONS = 12
 JOB_BOARD_DOMAINS = (
     "jobs.lever.co",
     "boards.greenhouse.io",
@@ -64,7 +69,19 @@ class StartupDiscoverer(BaseAgent):
         self.listing_expander = JobListingExpander(search_router=self.search_router)
         self._provider_hits: dict[str, int] = {}
 
-    async def run(self, profile: UserProfile) -> list[JobPosting]:
+    async def run(
+        self,
+        profile: UserProfile,
+        on_progress: ProgressCallback | None = None,
+    ) -> list[JobPosting]:
+        if not read_uses_web_search(profile):
+            return []
+
+        def emit(event: str, payload: dict[str, Any]) -> None:
+            if on_progress:
+                on_progress(event, payload)
+
+        emit("status", {"message": "Espansione keyword (DeepSeek)..."})
         keywords = await self.keyword_expander.expand(profile)
         keywords = keywords[:MAX_KEYWORDS_PER_SCAN]
         excluded_companies = self._load_excluded_companies(profile)
@@ -73,48 +90,96 @@ class StartupDiscoverer(BaseAgent):
 
         async with httpx.AsyncClient(timeout=self.timeout_seconds, follow_redirects=True) as client:
             location_targets = profile.search_location_targets()
+            search_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SEARCHES)
             search_tasks = []
             for keyword in keywords:
                 for location_target in location_targets:
                     for template in QUERY_TEMPLATES[:MAX_QUERIES_PER_KEYWORD]:
                         query = template.format(keyword=keyword, location=location_target).strip()
-                        search_tasks.append(self._search_all_engines(client, query, location_target))
+                        search_tasks.append(
+                            self._bounded_search(search_semaphore, client, query, location_target),
+                        )
 
-            results = await asyncio.gather(*search_tasks, return_exceptions=True)
-            for batch in results:
+            total_searches = len(search_tasks)
+            emit(
+                "status",
+                {"message": f"Startup Discoverer: {total_searches} ricerche web in coda..."},
+            )
+
+            raw_items: list[dict[str, Any]] = []
+            completed_searches = 0
+            for batch in asyncio.as_completed(search_tasks):
+                try:
+                    result = await batch
+                except Exception as exc:
+                    logger.warning("[StartupDiscoverer] Search batch failed: %s", exc)
+                    result = []
+                completed_searches += 1
+                if isinstance(result, list):
+                    raw_items.extend(result)
+                emit(
+                    "startup_search",
+                    {
+                        "current": completed_searches,
+                        "total": total_searches,
+                        "items_found": len(raw_items),
+                    },
+                )
+
+            if raw_items:
+                emit(
+                    "status",
+                    {"message": f"Elaborazione {len(raw_items)} risultati web..."},
+                )
+
+            expansion_semaphore = asyncio.Semaphore(MAX_CONCURRENT_EXPANSIONS)
+            expansion_lock = asyncio.Lock()
+            expansions_done = 0
+            expansion_limit = MAX_LISTING_EXPANSIONS
+
+            async def process_item(item: dict[str, Any]) -> list[JobPosting]:
+                nonlocal expansions_done
+                async with expansion_semaphore:
+                    job = self._normalize_result(item, profile)
+                    if not job:
+                        return []
+                    if self.listing_expander.should_expand(job):
+                        async with expansion_lock:
+                            if expansions_done >= expansion_limit:
+                                return []
+                            expansions_done += 1
+                        expanded = await self.listing_expander.expand(client, job, profile)
+                        return expanded if expanded else []
+                    return [job]
+
+            job_batches = await asyncio.gather(
+                *(process_item(item) for item in raw_items),
+                return_exceptions=True,
+            )
+            for batch in job_batches:
                 if isinstance(batch, Exception):
-                    logger.warning("[StartupDiscoverer] Search batch failed: %s", batch)
+                    logger.warning("[StartupDiscoverer] Item processing failed: %s", batch)
                     continue
-                for item in batch:
-                    jobs = await self._collect_jobs_from_result(client, item, profile)
-                    for job in jobs:
-                        if job.company.lower() in excluded_companies:
-                            continue
-                        if not _experience_level_matches(job, profile):
-                            continue
-                        jobs_by_url.setdefault(job.dedup_key, job)
-
+                for job in batch:
+                    if job.company.lower() in excluded_companies:
+                        continue
+                    if not _experience_level_matches(job, profile):
+                        continue
+                    jobs_by_url.setdefault(job.dedup_key, job)
         if self._provider_hits:
             logger.info("[StartupDiscoverer] Provider usage: %s", self._provider_hits)
         logger.info("[StartupDiscoverer] Collected %s unique jobs.", len(jobs_by_url))
         return list(jobs_by_url.values())
 
-    async def _collect_jobs_from_result(
+    async def _bounded_search(
         self,
+        semaphore: asyncio.Semaphore,
         client: httpx.AsyncClient,
-        item: dict[str, Any],
-        profile: UserProfile,
-    ) -> list[JobPosting]:
-        job = self._normalize_result(item, profile)
-        if not job:
-            return []
-
-        if self.listing_expander.should_expand(job):
-            expanded = await self.listing_expander.expand(client, job, profile)
-            if expanded:
-                return expanded
-            return []
-        return [job]
+        query: str,
+        location: str,
+    ) -> list[dict[str, Any]]:
+        async with semaphore:
+            return await self._search_all_engines(client, query, location)
 
     def _load_excluded_companies(self, profile: UserProfile) -> set[str]:
         if not self.companies_path.exists():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from typing import Any
 
 from models.job import JobPosting
 from models.user_profile import UserProfile
@@ -16,9 +17,9 @@ class BaseAgent(ABC):
     async def run(self, profile: UserProfile) -> list[JobPosting]:
         raise NotImplementedError
 
-    async def safe_run(self, profile: UserProfile) -> list[JobPosting]:
+    async def safe_run(self, profile: UserProfile, **kwargs: Any) -> list[JobPosting]:
         try:
-            results = await self.run(profile)
+            results = await self.run(profile, **kwargs)
             logger.info("[%s] Returned %s job postings.", self.name, len(results))
             return results
         except Exception as exc:

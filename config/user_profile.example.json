@@ -18,5 +18,6 @@
   "experience_level_rule": {
     "mode": "or_higher",
     "offset": 1
-  }
+  },
+  "search_mode": "full"
 }

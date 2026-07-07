@@ -8,7 +8,7 @@ from urllib.parse import quote, unquote
 
 import httpx
 
-from agents.search_providers.base import QuotaExhaustedError, infer_company_from_result, is_quota_message, organic_to_results, profile_location_hint
+from agents.search_providers.base import QuotaExhaustedError, RateLimitError, infer_company_from_result, is_quota_message, organic_to_results, profile_location_hint
 
 SCRAPERAPI_URL = "https://api.scraperapi.com"
 
@@ -45,8 +45,12 @@ class ScraperApiProvider:
             },
         )
 
-        if response.status_code in {402, 429, 403}:
-            raise QuotaExhaustedError(f"ScraperAPI quota/block ({response.status_code})")
+        if response.status_code == 429:
+            raise RateLimitError(f"ScraperAPI rate limit ({response.status_code})")
+        if response.status_code == 403:
+            raise RateLimitError(f"ScraperAPI temporary block ({response.status_code})")
+        if response.status_code == 402:
+            raise QuotaExhaustedError(f"ScraperAPI quota ({response.status_code})")
 
         if response.status_code >= 400:
             message = response.text
