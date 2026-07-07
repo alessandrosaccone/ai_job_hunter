@@ -8,11 +8,15 @@
   "location": "Milano, Italy",
   "work_mode": "Remote",
   "free_text_preferences": "",
-    "fundamental_criteria": {
+  "fundamental_criteria": {
     "location": true,
     "target_role": false,
     "salary": false,
     "work_mode": false,
     "experience_level": false
+  },
+  "experience_level_rule": {
+    "mode": "or_higher",
+    "offset": 1
   }
 }

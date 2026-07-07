@@ -3,25 +3,23 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from agents.base import BaseAgent
 from agents.job_prefilter import _experience_level_matches
+from agents.job_listing_expander import JobListingExpander
 from agents.keyword_expander import KeywordExpander
+from agents.search_providers.router import JobSearchRouter
 from models.job import JobPosting
 from models.user_profile import UserProfile
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_COMPANIES_PATH = Path("config/target_companies.json")
-SERPAPI_ENDPOINT = "https://serpapi.com/search.json"
 MAX_KEYWORDS_PER_SCAN = 5
 MAX_QUERIES_PER_KEYWORD = 3
 
@@ -31,6 +29,8 @@ JOB_BOARD_DOMAINS = (
     "myworkdayjobs.com",
     "myworkdaysite.com",
     "linkedin.com/jobs",
+    "glassdoor.com",
+    "glassdoor.it",
     "indeed.com",
     "stepstone.it",
     "stepstone.de",
@@ -52,32 +52,33 @@ class StartupDiscoverer(BaseAgent):
 
     def __init__(
         self,
-        api_key: str | None = None,
         companies_path: Path | str = DEFAULT_COMPANIES_PATH,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = 45.0,
         keyword_expander: KeywordExpander | None = None,
+        search_router: JobSearchRouter | None = None,
     ) -> None:
-        self.api_key = api_key or os.getenv("SERPAPI_API_KEY", "")
         self.companies_path = Path(companies_path)
         self.timeout_seconds = timeout_seconds
         self.keyword_expander = keyword_expander or KeywordExpander()
+        self.search_router = search_router or JobSearchRouter()
+        self.listing_expander = JobListingExpander(search_router=self.search_router)
+        self._provider_hits: dict[str, int] = {}
 
     async def run(self, profile: UserProfile) -> list[JobPosting]:
-        if not self.api_key or self.api_key == "your_serpapi_key_here":
-            logger.warning("[StartupDiscoverer] SERPAPI_API_KEY missing. Skipping discovery.")
-            return []
-
         keywords = await self.keyword_expander.expand(profile)
         keywords = keywords[:MAX_KEYWORDS_PER_SCAN]
         excluded_companies = self._load_excluded_companies(profile)
         jobs_by_url: dict[str, JobPosting] = {}
+        self._provider_hits = {}
 
         async with httpx.AsyncClient(timeout=self.timeout_seconds, follow_redirects=True) as client:
+            location_targets = profile.search_location_targets()
             search_tasks = []
             for keyword in keywords:
-                for template in QUERY_TEMPLATES[:MAX_QUERIES_PER_KEYWORD]:
-                    query = template.format(keyword=keyword, location=profile.location).strip()
-                    search_tasks.append(self._search_all_engines(client, query))
+                for location_target in location_targets:
+                    for template in QUERY_TEMPLATES[:MAX_QUERIES_PER_KEYWORD]:
+                        query = template.format(keyword=keyword, location=location_target).strip()
+                        search_tasks.append(self._search_all_engines(client, query, location_target))
 
             results = await asyncio.gather(*search_tasks, return_exceptions=True)
             for batch in results:
@@ -85,17 +86,35 @@ class StartupDiscoverer(BaseAgent):
                     logger.warning("[StartupDiscoverer] Search batch failed: %s", batch)
                     continue
                 for item in batch:
-                    job = self._normalize_result(item, profile)
-                    if not job:
-                        continue
-                    if job.company.lower() in excluded_companies:
-                        continue
-                    if not _experience_level_matches(job, profile):
-                        continue
-                    jobs_by_url.setdefault(job.dedup_key, job)
+                    jobs = await self._collect_jobs_from_result(client, item, profile)
+                    for job in jobs:
+                        if job.company.lower() in excluded_companies:
+                            continue
+                        if not _experience_level_matches(job, profile):
+                            continue
+                        jobs_by_url.setdefault(job.dedup_key, job)
 
-        logger.info("[StartupDiscoverer] Collected %s unique jobs from SerpApi.", len(jobs_by_url))
+        if self._provider_hits:
+            logger.info("[StartupDiscoverer] Provider usage: %s", self._provider_hits)
+        logger.info("[StartupDiscoverer] Collected %s unique jobs.", len(jobs_by_url))
         return list(jobs_by_url.values())
+
+    async def _collect_jobs_from_result(
+        self,
+        client: httpx.AsyncClient,
+        item: dict[str, Any],
+        profile: UserProfile,
+    ) -> list[JobPosting]:
+        job = self._normalize_result(item, profile)
+        if not job:
+            return []
+
+        if self.listing_expander.should_expand(job):
+            expanded = await self.listing_expander.expand(client, job, profile)
+            if expanded:
+                return expanded
+            return []
+        return [job]
 
     def _load_excluded_companies(self, profile: UserProfile) -> set[str]:
         if not self.companies_path.exists():
@@ -113,69 +132,41 @@ class StartupDiscoverer(BaseAgent):
         self,
         client: httpx.AsyncClient,
         query: str,
+        location: str,
     ) -> list[dict[str, Any]]:
-        google_jobs = await self._safe_search(client, "google_jobs", query)
-        google_web = await self._safe_search(client, "google", f"{query} jobs")
-        return [*google_jobs, *google_web]
+        google_jobs, _provider = await self.search_router.search(
+            client,
+            "google_jobs",
+            query,
+            location,
+            job_board_filter=self._is_job_board_url,
+        )
+        self._count_provider(_provider, len(google_jobs))
 
-    async def _safe_search(
-        self,
-        client: httpx.AsyncClient,
-        engine: str,
-        query: str,
-    ) -> list[dict[str, Any]]:
-        try:
-            return await self._search(client, engine, query)
-        except Exception as exc:
-            logger.warning("[StartupDiscoverer] SerpApi %s failed for '%s': %s", engine, query, exc)
-            return []
+        google_web, provider = await self.search_router.search(
+            client,
+            "google",
+            f"{query} jobs",
+            location,
+            job_board_filter=self._is_job_board_url,
+        )
+        self._count_provider(provider, len(google_web))
 
-    @retry(
-        reraise=True,
-        stop=stop_after_attempt(2),
-        wait=wait_exponential(multiplier=1, min=1, max=4),
-        retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
-    )
-    async def _search(
-        self,
-        client: httpx.AsyncClient,
-        engine: str,
-        query: str,
-    ) -> list[dict[str, Any]]:
-        params = {
-            "engine": engine,
-            "q": query,
-            "api_key": self.api_key,
-            "num": 10,
-        }
-        response = await client.get(SERPAPI_ENDPOINT, params=params)
-        response.raise_for_status()
-        payload = response.json()
+        filtered_web = [item for item in google_web if self._is_job_board_url(self._item_link(item))]
+        return [*google_jobs, *filtered_web]
 
-        if engine == "google_jobs":
-            jobs = payload.get("jobs_results", [])
-            return [{"source_engine": "google_jobs", **item} for item in jobs if isinstance(item, dict)]
+    def _count_provider(self, provider: str | None, count: int) -> None:
+        if provider and count:
+            self._provider_hits[provider] = self._provider_hits.get(provider, 0) + count
 
-        organic = payload.get("organic_results", [])
-        parsed: list[dict[str, Any]] = []
-        for item in organic:
-            if not isinstance(item, dict):
-                continue
-            link = item.get("link", "")
-            if not self._is_job_board_url(link):
-                continue
-            parsed.append(
-                {
-                    "source_engine": "google",
-                    "title": item.get("title", ""),
-                    "company_name": self._infer_company_from_result(item),
-                    "location": profile_location_hint(item),
-                    "description": item.get("snippet", ""),
-                    "apply_options": [{"link": link}],
-                    "job_id": link,
-                }
-            )
-        return parsed
+    def _item_link(self, item: dict[str, Any]) -> str:
+        link = item.get("link")
+        if link:
+            return str(link)
+        apply_options = item.get("apply_options", [])
+        if apply_options and isinstance(apply_options[0], dict):
+            return str(apply_options[0].get("link", ""))
+        return ""
 
     def _normalize_result(self, item: dict[str, Any], profile: UserProfile) -> JobPosting | None:
         title = (item.get("title") or "").strip()
@@ -258,9 +249,3 @@ class StartupDiscoverer(BaseAgent):
         host = urlparse(link).netloc.replace("www.", "")
         return host.split(".")[0].replace("-", " ").title()
 
-
-def profile_location_hint(item: dict[str, Any]) -> str:
-    snippet = item.get("snippet", "")
-    title = item.get("title", "")
-    match = re.search(r"\b(?:in|a|@)\s+([A-Za-zÀ-ÿ\s,-]{3,40})", f"{title} {snippet}")
-    return match.group(1).strip() if match else ""

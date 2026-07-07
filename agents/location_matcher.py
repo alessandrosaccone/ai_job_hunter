@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any
 
 from openai import AsyncOpenAI
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from models.job import JobPosting
 from models.user_profile import UserProfile
@@ -31,7 +32,7 @@ Return ONLY json:
 }
 """
 
-BATCH_SIZE = 8
+BATCH_SIZE = 5
 
 
 class LocationMatchItem(BaseModel):
@@ -120,7 +121,7 @@ class LocationMatcher:
             completion = await self.client.chat.completions.create(
                 model=self.model,
                 temperature=0.0,
-                max_tokens=400,
+                max_tokens=800,
                 response_format={"type": "json_object"},
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -131,7 +132,7 @@ class LocationMatcher:
                 ],
             )
             content = completion.choices[0].message.content or "{}"
-            parsed = LocationMatchBatch.model_validate(json.loads(content))
+            parsed = _parse_location_batch(content)
             results = {item.id: item.matches for item in parsed.results}
             if len(results) < len(jobs):
                 for job, item in zip(jobs, parsed.results, strict=False):
@@ -140,3 +141,14 @@ class LocationMatcher:
         except (json.JSONDecodeError, ValidationError, Exception) as exc:
             logger.warning("[LocationMatcher] Batch failed, keeping jobs in batch: %s", exc)
             return {job.id: True for job in jobs}
+
+
+def _parse_location_batch(content: str) -> LocationMatchBatch:
+    cleaned = content.strip()
+    try:
+        return LocationMatchBatch.model_validate(json.loads(cleaned))
+    except (json.JSONDecodeError, ValidationError):
+        match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+        if not match:
+            raise
+        return LocationMatchBatch.model_validate(json.loads(match.group(0)))

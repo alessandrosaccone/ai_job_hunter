@@ -91,5 +91,6 @@ class KeywordExpander:
         for role in profile.target_roles:
             if level_word:
                 expanded.append(f"{level_word} {role}".strip())
-            expanded.append(f"{role} {profile.location}".strip())
+            for place in profile.search_location_targets():
+                expanded.append(f"{role} {place}".strip())
         return list(dict.fromkeys(keyword for keyword in expanded if keyword))[:10]

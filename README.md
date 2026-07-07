@@ -6,19 +6,74 @@ Runs **locally** via a [Streamlit](https://streamlit.io/) web interface.
 
 ## How it works
 
-1. **Profile** — Configure target roles, location, work mode, desired salary, and free-text preferences.
-2. **Job collection** — Two agents run in parallel:
-   - **Target Hunter**: queries ATS APIs (Lever, Greenhouse) for companies listed in `config/target_companies.json`.
-   - **Startup Discoverer**: uses SerpApi to find listings on job boards and startup sites.
-3. **Pre-filter** — Fundamental criteria (location, role, salary, etc.) and lightweight AI matchers reduce volume before full analysis.
-4. **AI matching** — DeepSeek evaluates each remaining listing and assigns a score from 0 to 10.
-5. **Results** — Listings with a score ≥ the configured threshold are promoted and shown on the dashboard.
+1. **Profiles** — Create one or more job-search profiles from the sidebar. Each profile has its own preferences, memory, scan history, and saved applications.
+2. **Profile setup** — Configure career field, target roles, **comma-separated locations** (each place triggers separate searches), work mode, desired salary, experience-level rules, and optional **fundamental criteria** (hard pre-filters before AI).
+3. **Job collection** — Two agents run in parallel:
+   - **Target Hunter**: queries ATS APIs (Lever, Greenhouse) for companies in `config/target_companies.json` plus **dynamically discovered** boards (see below).
+   - **Startup Discoverer**: searches Google Jobs and the web via a **provider fallback chain** (see below).
+4. **Dynamic ATS discovery** — From Startup Discoverer results, new Lever/Greenhouse companies not already in the target list are **probed via API**. If accessible, they are saved to `discovered_companies.json` (per profile) and Target Hunter re-fetches **full job descriptions** from those boards. On duplicate URLs, the richer API version wins over Google snippets.
+5. **Pre-filter** — Optional fundamental criteria act as hard gates (location, role, salary with €4,000 tolerance, work mode, experience level). Lightweight AI matchers handle location/role when enabled. Listings **without a stated salary still pass** the salary pre-filter; RAL is researched later during AI matching.
+6. **AI matching** — DeepSeek evaluates each remaining listing and assigns a score from 0 to 10. When salary is missing, **Salary Researcher** gathers web snippets through the provider chain (DeepSeek web excluded) and extracts/synthesizes RAL from real sources only.
+7. **CV guidance** — For each match, the AI suggests the likely application channel (human recruiter, ATS, or mixed) and which CV style to send.
+8. **Results** — Listings with a score ≥ the configured threshold are promoted on the **Dashboard**, logged in **Log match**, and can be bookmarked in **Salvati**.
+
+## Search providers & fallback
+
+Job discovery and salary research share a `JobSearchRouter` that tries providers in order until one returns results. Default order:
+
+`SerpApi` → `Serper` → `DataForSEO` → `Apify` → `ScraperAPI` → `DuckDuckGo` → `DeepSeek web`
+
+| Provider | API key | Notes |
+|----------|---------|-------|
+| SerpApi | `SERPAPI_API_KEY` | Primary; supports Google Jobs |
+| Serper | `SERPER_API_KEY` | Fast, cost-effective Google fallback |
+| DataForSEO | `DATAFORSEO_LOGIN` + `DATAFORSEO_PASSWORD` | High-volume Google fallback; uses [Basic Auth](https://docs.dataforseo.com/v3/auth/) (not a single API key) |
+| Apify | `APIFY_API_TOKEN` | Google Search Scraper actor |
+| ScraperAPI | `SCRAPERAPI_API_KEY` | Anti-block scraping fallback |
+| DuckDuckGo | — | Free, no key required (`duckduckgo-search`) |
+| DeepSeek web | `DEEPSEEK_API_KEY` | Last resort via DeepSeek native web search |
+
+- Configure only the providers you use — unconfigured ones are skipped automatically.
+- When a provider hits a quota/limit error, it is marked exhausted for the rest of the **calendar month** (`data/search_quota.json`) and skipped until the next month.
+- Override the order with `SEARCH_PROVIDER_ORDER` in `.env`.
+- The sidebar shows which keys are configured and which providers are exhausted this month.
+- During a scan, the **activity log** and **Provider di ricerca usati** panel show which APIs were called and with what outcome (`OK`, empty, error).
+
+## Interrupting and resuming a scan
+
+You can stop Streamlit (`Ctrl+C` in the terminal) and start a new scan safely:
+
+| What | Saved when you stop mid-scan? |
+|------|-------------------------------|
+| **Jobs already analyzed by AI** | Yes — URL written to `memory.json` after each listing |
+| **Promoted matches (Dashboard)** | Yes — partial `scan_results.json` updated after each promotion |
+| **Dynamically discovered ATS companies** | Yes — saved to `discovered_companies.json` as soon as verified |
+| **Log match (full scan history)** | Only when a scan **completes** normally |
+| **Live activity log in the UI** | Session-only (lost on page reload) |
+
+On the next scan, already-analyzed URLs are **skipped automatically**. Collection runs again (new web results), but the AI phase won't re-process listings already in memory. Restart Streamlit to pick up code changes before resuming.
+
+> **DataForSEO: why login + password?** DataForSEO does not issue a single API key. It uses HTTP Basic Auth with two credentials from [API Access](https://app.dataforseo.com/api-access): your account email (`DATAFORSEO_LOGIN`) and a dedicated **API password** (`DATAFORSEO_PASSWORD`) auto-generated by DataForSEO — this is **not** your dashboard login password. If you don't use DataForSEO, leave both empty; the router skips it automatically.
+
+## Features
+
+- **Multiple profiles** — Switch between profiles (e.g. different people or job searches) from the sidebar. Create, select, or delete profiles; each keeps isolated data.
+- **Multi-location search** — `Milano, Italy, Spain` runs separate query batches per location for job discovery, keyword expansion, and salary research.
+- **Dynamic ATS discovery** — Lever/Greenhouse companies found via Google are verified and added to Target Hunter automatically (per profile).
+- **Resilient web search** — Multi-provider fallback with monthly quota tracking; provider usage visible in the dashboard log.
+- **Scan history** — Promoted matches stored per profile, grouped by day in collapsible expanders with sortable views.
+- **Saved applications** — Bookmark interesting matches; saved jobs are marked as seen and skipped in future scans.
+- **Experience-level rules** — Filter by exact level, lower levels, or N steps above/below your level.
+- **Salary transparency** — Web research via the provider chain when RAL is missing; modest score penalty for lack of transparency.
+- **CV strategy hints** — Application channel detection (ATS / recruiter / mixed) with practical CV advice.
+- **Legacy migration** — Existing `config/user_profile.json` and `data/` files are migrated automatically to the default profile on first run.
 
 ## Requirements
 
 - Python 3.11+
-- [DeepSeek](https://platform.deepseek.com/) API key
-- [SerpApi](https://serpapi.com/) API key
+- [DeepSeek](https://platform.deepseek.com/) API key (**required**)
+- At least one paid search provider recommended ([SerpApi](https://serpapi.com/), [Serper](https://serper.dev/), [DataForSEO](https://dataforseo.com/), [Apify](https://apify.com/), or [ScraperAPI](https://www.scraperapi.com/))
+- DuckDuckGo works without a key as a basic fallback (`duckduckgo-search` package)
 
 ## Installation
 
@@ -47,25 +102,38 @@ This project **does not include** a `.env` file with real credentials. To run th
 cp .env.example .env
 ```
 
-Open `.env` and fill in **your** values for each variable:
+Open `.env` and fill in **your** values:
 
 | Variable | Description |
 |----------|-------------|
-| `DEEPSEEK_API_KEY` | DeepSeek API key |
+| `DEEPSEEK_API_KEY` | DeepSeek API key (matching, keyword expansion, salary synthesis, web search fallback) |
 | `DEEPSEEK_MODEL` | Model to use (default: `deepseek-chat`) |
 | `DEEPSEEK_BASE_URL` | API endpoint (default: `https://api.deepseek.com`) |
-| `SERPAPI_API_KEY` | SerpApi API key |
-| `MATCH_SCORE_THRESHOLD` | Minimum match score (default: `7`) |
+| `SERPAPI_API_KEY` | SerpApi key — primary search provider |
+| `SERPER_API_KEY` | [Serper.dev](https://serper.dev/) key |
+| `DATAFORSEO_LOGIN` | [DataForSEO](https://dataforseo.com/) API login (usually your account email; from API Access) |
+| `DATAFORSEO_PASSWORD` | DataForSEO API password (auto-generated; **not** your dashboard password) |
+| `APIFY_API_TOKEN` | [Apify](https://apify.com/) token |
+| `APIFY_GOOGLE_SEARCH_ACTOR` | Optional Apify actor (default: `apify~google-search-scraper`) |
+| `SCRAPERAPI_API_KEY` | [ScraperAPI](https://www.scraperapi.com/) key |
+| `SEARCH_PROVIDER_ORDER` | Optional comma-separated provider order |
+| `MATCH_SCORE_THRESHOLD` | Minimum match score to promote a listing (default: `7`) |
 
-### User profile
+Only `DEEPSEEK_API_KEY` is strictly required. Configure as many search providers as you want. For DataForSEO, **both** `DATAFORSEO_LOGIN` and `DATAFORSEO_PASSWORD` must be set (the sidebar only checks the login field for display).
 
-Copy the example profile and customize it:
+### User profiles
+
+Profiles are managed from the app sidebar — no manual file editing required for day-to-day use.
+
+On first launch, a default profile is created automatically. If you had a legacy `config/user_profile.json`, it is migrated into `data/profiles/predefinito/`.
+
+To start from the example template:
 
 ```bash
-cp config/user_profile.example.json config/user_profile.json
+cp config/user_profile.example.json data/profiles/predefinito/profile.json
 ```
 
-Edit `config/user_profile.json` with your data (roles, location, preferences, etc.). This file is also excluded from Git to avoid publishing personal information.
+You can also create additional profiles directly in the UI (**Nuovo profilo** in the sidebar).
 
 ## Running the app
 
@@ -75,33 +143,57 @@ streamlit run app.py
 
 The app opens in your browser (default: `http://localhost:8501`).
 
-1. Go to the **Profilo** tab, fill in the fields, and save.
-2. Go to the **Dashboard** tab and click **Avvia Scansione**.
-3. Check the sidebar to confirm API keys are configured.
+1. Select or create a profile in the **sidebar**.
+2. Check the sidebar: DeepSeek key + at least one search provider should show **Configured**.
+3. Go to the **Profilo** tab, fill in the fields, and save.
+4. Go to the **Dashboard** tab and click **Avvia Scansione**.
+5. Review promoted matches, save interesting ones in **Salvati**, and browse past scans in **Log match**.
 
 ## Project structure
 
 ```
 ai_proj/
-├── app.py                  # Streamlit UI
-├── orchestrator.py         # Pipeline and agent coordination
+├── app.py                      # Streamlit UI (profiles, dashboard, history, saved)
+├── orchestrator.py             # Pipeline and agent coordination
 ├── agents/
-│   ├── target_hunter.py    # Listings from target companies (Lever/Greenhouse)
-│   ├── startup_discoverer.py
-│   ├── ai_matcher.py       # Full AI evaluation
+│   ├── target_hunter.py        # Listings from target companies (Lever/Greenhouse)
+│   ├── startup_discoverer.py   # Job discovery via search provider chain
+│   ├── ats_discovery.py        # Detect & verify Lever/Greenhouse from search URLs
+│   ├── ai_matcher.py           # Full AI evaluation + CV strategy
+│   ├── salary_researcher.py    # Web salary research (provider chain + DeepSeek)
+│   ├── job_search_fallback.py  # DuckDuckGo / DeepSeek web job search adapters
+│   ├── deepseek_web_search.py  # DeepSeek native web search tool
+│   ├── duckduckgo_search.py    # DuckDuckGo organic search wrapper
+│   ├── search_providers/       # SerpApi, Serper, DataForSEO, Apify, ScraperAPI + router
 │   ├── location_matcher.py
 │   ├── role_matcher.py
 │   ├── job_prefilter.py
 │   └── keyword_expander.py
-├── models/                 # Pydantic models (Job, Profile, Results)
-├── storage/                # Memory for already-seen listings
+├── models/                     # Pydantic models (Job, Profile, Results)
+├── storage/
+│   ├── memory.py               # Seen-job memory per profile
+│   ├── profile_registry.py     # Multi-profile registry and paths
+│   ├── saved_jobs.py           # Bookmarked applications
+│   ├── scan_history.py         # Scan history per profile
+│   ├── discovered_companies.py # Dynamic Lever/Greenhouse boards per profile
+│   └── search_quota.py         # Monthly provider quota tracking
 ├── config/
 │   ├── user_profile.example.json
 │   ├── target_companies.json
 │   └── career_fields.json
-├── data/                   # Scan results and memory (generated at runtime)
+├── data/                       # Runtime data (gitignored)
+│   ├── search_quota.json       # Provider exhaustion flags (monthly reset)
+│   └── profiles/
+│       ├── registry.json
+│       └── <slug>/
+│           ├── profile.json
+│           ├── memory.json
+│           ├── scan_results.json
+│           ├── scan_history.json
+│           ├── discovered_companies.json
+│           └── saved_jobs.json
 ├── requirements.txt
-├── .env.example            # Environment variable template (no secrets)
+├── .env.example                # Environment variable template (no secrets)
 └── .gitignore
 ```
 
@@ -110,15 +202,15 @@ ai_proj/
 For security, the following files **must not be uploaded to GitHub**:
 
 - `.env` — API credentials
-- `config/user_profile.json` — personal data
-- `data/` — scan results and local memory
+- `config/user_profile.json` — legacy personal profile (if present)
+- `data/` — profiles, scan results, history, saved applications, memory, and search quota state
 - `.venv/` — Python virtual environment
 
 They are already listed in `.gitignore`.
 
 ## License
 
-Personal / educational use. Review the DeepSeek and SerpApi terms of service before use.
+Personal / educational use. Review the DeepSeek and third-party search API terms of service before use.
 
 ---
 
@@ -130,19 +222,74 @@ Funziona in **locale** tramite interfaccia web [Streamlit](https://streamlit.io/
 
 ## Come funziona
 
-1. **Profilo** — Configuri ruoli target, località, modalità di lavoro, stipendio desiderato e preferenze testuali.
-2. **Raccolta annunci** — Due agenti lavorano in parallelo:
-   - **Target Hunter**: interroga le API ATS (Lever, Greenhouse) delle aziende in `config/target_companies.json`.
-   - **Startup Discoverer**: usa SerpApi per trovare annunci su job board e siti di startup.
-3. **Pre-filtro** — Criteri fondamentali (località, ruolo, stipendio, ecc.) e matcher AI leggeri riducono il volume prima dell'analisi completa.
-4. **Matching AI** — DeepSeek valuta ogni annuncio rimasto e assegna un punteggio da 0 a 10.
-5. **Risultati** — Gli annunci con score ≥ soglia configurata vengono promossi e mostrati nella dashboard.
+1. **Profili** — Dalla sidebar puoi creare più profili di ricerca. Ogni profilo ha preferenze, memoria, storico scansioni e candidature salvate separati.
+2. **Configurazione profilo** — Imposti campo professionale, ruoli target, **località separate da virgola** (ogni voce genera ricerche distinte), modalità di lavoro, RAL desiderata, regole sul livello di esperienza e **criteri fondamentali** opzionali (pre-filtri rigidi prima dell'AI).
+3. **Raccolta annunci** — Due agenti lavorano in parallelo:
+   - **Target Hunter**: interroga le API ATS (Lever, Greenhouse) delle aziende in `config/target_companies.json` più le board **scoperte dinamicamente** (vedi sotto).
+   - **Startup Discoverer**: cerca su Google Jobs e sul web tramite una **catena di provider** (vedi sotto).
+4. **Scoperta ATS dinamica** — Dai risultati dello Startup Discoverer, nuove aziende Lever/Greenhouse non già in lista target vengono **verificate via API**. Se accessibili, vengono salvate in `discovered_companies.json` (per profilo) e il Target Hunter recupera le **descrizioni complete** da quelle board. Su URL duplicati, vince la versione API più ricca rispetto agli snippet Google.
+5. **Pre-filtro** — I criteri fondamentali opzionali scartano a priori (località, ruolo, RAL con tolleranza di €4.000, modalità, livello). Matcher AI leggeri gestiscono località/ruolo se attivi. Gli annunci **senza RAL indicata passano** comunque il pre-filtro stipendio; la RAL viene cercata dopo durante il matching AI.
+6. **Matching AI** — DeepSeek valuta ogni annuncio rimasto e assegna un punteggio da 0 a 10. Se la RAL non è indicata, **Salary Researcher** raccoglie snippet web con la catena di provider (DeepSeek web escluso) e estrae/sintetizza la RAL solo da fonti reali.
+7. **Suggerimento CV** — Per ogni match, l'AI indica il canale di candidatura probabile (recruiter umano, ATS, misto) e quale tipo di CV inviare.
+8. **Risultati** — Gli annunci con score ≥ soglia configurata vengono promossi nella **Dashboard**, registrati nel **Log match** e possono essere salvati in **Salvati**.
+
+## Provider di ricerca e fallback
+
+La discovery annunci e la ricerca RAL condividono un `JobSearchRouter` che prova i provider in ordine finché uno restituisce risultati. Ordine predefinito:
+
+`SerpApi` → `Serper` → `DataForSEO` → `Apify` → `ScraperAPI` → `DuckDuckGo` → `DeepSeek web`
+
+| Provider | Chiave API | Note |
+|----------|------------|------|
+| SerpApi | `SERPAPI_API_KEY` | Principale; supporta Google Jobs |
+| Serper | `SERPER_API_KEY` | Fallback Google veloce ed economico |
+| DataForSEO | `DATAFORSEO_LOGIN` + `DATAFORSEO_PASSWORD` | Fallback Google per volumi elevati; usa [Basic Auth](https://docs.dataforseo.com/v3/auth/) (non una singola API key) |
+| Apify | `APIFY_API_TOKEN` | Attore Google Search Scraper |
+| ScraperAPI | `SCRAPERAPI_API_KEY` | Fallback anti-blocco |
+| DuckDuckGo | — | Gratuito, nessuna chiave (`duckduckgo-search`) |
+| DeepSeek web | `DEEPSEEK_API_KEY` | Ultima risorsa con ricerca web nativa DeepSeek |
+
+- Configura solo i provider che usi — quelli senza chiave vengono saltati automaticamente.
+- Se un provider va in quota/limite, viene marcato esaurito per il resto del **mese solare** (`data/search_quota.json`) e ignorato fino al mese successivo.
+- Puoi personalizzare l'ordine con `SEARCH_PROVIDER_ORDER` nel `.env`.
+- La sidebar mostra quali chiavi sono configurate e quali provider sono esauriti nel mese corrente.
+- Durante la scansione, il **log attività** e il pannello **Provider di ricerca usati** mostrano quali API sono state chiamate e con quale esito (`OK`, vuoto, errore).
+
+## Interrompere e riprendere una scansione
+
+Puoi fermare Streamlit (`Ctrl+C` nel terminale) e avviare una nuova scansione in sicurezza:
+
+| Cosa | Salvato se interrompi a metà? |
+|------|-------------------------------|
+| **Annunci già analizzati dall'AI** | Sì — URL scritto in `memory.json` dopo ogni annuncio |
+| **Match promossi (Dashboard)** | Sì — `scan_results.json` aggiornato parzialmente dopo ogni promozione |
+| **Aziende ATS scoperte dinamicamente** | Sì — salvate in `discovered_companies.json` appena verificate |
+| **Log match (storico completo)** | Solo quando la scansione **termina** normalmente |
+| **Log attività live nell'UI** | Solo sessione corrente (perso al reload della pagina) |
+
+Alla scansione successiva, gli URL già analizzati vengono **saltati automaticamente**. La raccolta riparte (nuovi risultati web), ma la fase AI non riprocessa gli annunci già in memoria. Riavvia Streamlit per caricare modifiche al codice prima di riprendere.
+
+> **DataForSEO: perché login e password?** DataForSEO non usa una singola API key. Autentica le richieste con HTTP Basic Auth e due credenziali da [API Access](https://app.dataforseo.com/api-access): l'email dell'account (`DATAFORSEO_LOGIN`) e una **password API** (`DATAFORSEO_PASSWORD`) generata automaticamente da DataForSEO — **non** è la password del dashboard. Se non usi DataForSEO, lascia entrambi vuoti: il router lo salta da solo.
+
+## Funzionalità
+
+- **Profili multipli** — Cambia profilo dalla sidebar (es. persone diverse o ricerche distinte). Crea, seleziona o elimina profili; ognuno ha dati isolati.
+- **Ricerca multi-località** — `Milano, Italy, Spain` avvia batch di query separati per ogni località (discovery annunci, keyword e ricerca RAL).
+- **Scoperta ATS dinamica** — Aziende Lever/Greenhouse trovate via Google vengono verificate e aggiunte al Target Hunter automaticamente (per profilo).
+- **Ricerca web resiliente** — Fallback multi-provider con tracking quote mensile; utilizzo provider visibile nel log della dashboard.
+- **Storico scansioni** — Match promossi salvati per profilo, raggruppati per giorno in expander collassabili con ordinamento personalizzabile.
+- **Candidature salvate** — Salva i match interessanti; gli annunci salvati vengono marcati come già visti e non rianalizzati.
+- **Regole livello esperienza** — Filtra per livello esatto, livelli inferiori, o X gradini sopra/sotto il tuo.
+- **Trasparenza RAL** — Ricerca web tramite la catena di provider quando la RAL manca; penalità leggera sul punteggio.
+- **Suggerimenti CV** — Rilevamento canale candidatura (ATS / recruiter / misto) con consigli pratici.
+- **Migrazione legacy** — Un eventuale `config/user_profile.json` e i file in `data/` vengono migrati automaticamente al profilo predefinito al primo avvio.
 
 ## Requisiti
 
 - Python 3.11+
-- Chiave API [DeepSeek](https://platform.deepseek.com/)
-- Chiave API [SerpApi](https://serpapi.com/)
+- Chiave API [DeepSeek](https://platform.deepseek.com/) (**obbligatoria**)
+- Almeno un provider di ricerca a pagamento consigliato ([SerpApi](https://serpapi.com/), [Serper](https://serper.dev/), [DataForSEO](https://dataforseo.com/), [Apify](https://apify.com/), [ScraperAPI](https://www.scraperapi.com/))
+- DuckDuckGo funziona senza chiave come fallback base (pacchetto `duckduckgo-search`)
 
 ## Installazione
 
@@ -171,25 +318,38 @@ Il progetto **non include** il file `.env` con le credenziali reali. Per far fun
 cp .env.example .env
 ```
 
-Apri `.env` e inserisci **i tuoi** valori per ogni variabile:
+Apri `.env` e inserisci **i tuoi** valori:
 
 | Variabile | Descrizione |
 |-----------|-------------|
-| `DEEPSEEK_API_KEY` | Chiave API DeepSeek |
+| `DEEPSEEK_API_KEY` | Chiave API DeepSeek (matching, espansione keyword, sintesi RAL, fallback ricerca web) |
 | `DEEPSEEK_MODEL` | Modello da usare (default: `deepseek-chat`) |
 | `DEEPSEEK_BASE_URL` | Endpoint API (default: `https://api.deepseek.com`) |
-| `SERPAPI_API_KEY` | Chiave API SerpApi |
-| `MATCH_SCORE_THRESHOLD` | Soglia minima di match (default: `7`) |
+| `SERPAPI_API_KEY` | Chiave SerpApi — provider principale |
+| `SERPER_API_KEY` | Chiave [Serper.dev](https://serper.dev/) |
+| `DATAFORSEO_LOGIN` | Login API [DataForSEO](https://dataforseo.com/) (di solito l'email dell'account; da API Access) |
+| `DATAFORSEO_PASSWORD` | Password API DataForSEO (generata automaticamente; **non** la password del dashboard) |
+| `APIFY_API_TOKEN` | Token [Apify](https://apify.com/) |
+| `APIFY_GOOGLE_SEARCH_ACTOR` | Attore Apify opzionale (default: `apify~google-search-scraper`) |
+| `SCRAPERAPI_API_KEY` | Chiave [ScraperAPI](https://www.scraperapi.com/) |
+| `SEARCH_PROVIDER_ORDER` | Ordine provider opzionale (separato da virgola) |
+| `MATCH_SCORE_THRESHOLD` | Soglia minima di match per promuovere un annuncio (default: `7`) |
 
-### Profilo utente
+È obbligatoria solo `DEEPSEEK_API_KEY`. Configura quanti provider di ricerca vuoi. Per DataForSEO servono **entrambi** `DATAFORSEO_LOGIN` e `DATAFORSEO_PASSWORD` (la sidebar controlla solo il login per lo stato visivo).
 
-Copia il profilo di esempio e personalizzalo:
+### Profili utente
+
+I profili si gestiscono dalla sidebar dell'app — non serve modificare file manualmente per l'uso quotidiano.
+
+Al primo avvio viene creato un profilo predefinito. Se avevi un `config/user_profile.json` legacy, viene migrato in `data/profiles/predefinito/`.
+
+Per partire dal template di esempio:
 
 ```bash
-cp config/user_profile.example.json config/user_profile.json
+cp config/user_profile.example.json data/profiles/predefinito/profile.json
 ```
 
-Modifica `config/user_profile.json` con i tuoi dati (ruoli, località, preferenze, ecc.). Anche questo file è escluso da Git per non pubblicare informazioni personali.
+Puoi anche creare profili aggiuntivi direttamente dall'interfaccia (**Nuovo profilo** nella sidebar).
 
 ## Avvio
 
@@ -199,33 +359,57 @@ streamlit run app.py
 
 L'app si apre nel browser (di default su `http://localhost:8501`).
 
-1. Vai alla tab **Profilo**, compila i campi e salva.
-2. Vai alla tab **Dashboard** e clicca **Avvia Scansione**.
-3. Controlla nella sidebar che le API key risultino configurate.
+1. Seleziona o crea un profilo nella **sidebar**.
+2. Controlla la sidebar: la chiave DeepSeek e almeno un provider di ricerca devono risultare **Configured**.
+3. Vai alla tab **Profilo**, compila i campi e salva.
+4. Vai alla tab **Dashboard** e clicca **Avvia Scansione**.
+5. Esamina i match promossi, salva quelli interessanti in **Salvati** e consulta le scansioni passate in **Log match**.
 
 ## Struttura del progetto
 
 ```
 ai_proj/
-├── app.py                  # Interfaccia Streamlit
-├── orchestrator.py         # Coordinamento pipeline e agenti
+├── app.py                      # Interfaccia Streamlit (profili, dashboard, storico, salvati)
+├── orchestrator.py             # Coordinamento pipeline e agenti
 ├── agents/
-│   ├── target_hunter.py    # Annunci da aziende target (Lever/Greenhouse)
-│   ├── startup_discoverer.py
-│   ├── ai_matcher.py       # Valutazione AI completa
+│   ├── target_hunter.py        # Annunci da aziende target (Lever/Greenhouse)
+│   ├── startup_discoverer.py   # Discovery annunci via catena di provider
+│   ├── ats_discovery.py        # Rileva e verifica Lever/Greenhouse da URL di ricerca
+│   ├── ai_matcher.py           # Valutazione AI completa + strategia CV
+│   ├── salary_researcher.py    # Ricerca RAL web (catena provider + DeepSeek)
+│   ├── job_search_fallback.py  # Adapter ricerca annunci DuckDuckGo / DeepSeek web
+│   ├── deepseek_web_search.py  # Tool ricerca web nativo DeepSeek
+│   ├── duckduckgo_search.py    # Wrapper ricerca organica DuckDuckGo
+│   ├── search_providers/       # SerpApi, Serper, DataForSEO, Apify, ScraperAPI + router
 │   ├── location_matcher.py
 │   ├── role_matcher.py
 │   ├── job_prefilter.py
 │   └── keyword_expander.py
-├── models/                 # Modelli Pydantic (Job, Profilo, Risultati)
-├── storage/                # Memoria annunci già visti
+├── models/                     # Modelli Pydantic (Job, Profilo, Risultati)
+├── storage/
+│   ├── memory.py               # Memoria annunci visti per profilo
+│   ├── profile_registry.py     # Registry profili multipli e percorsi file
+│   ├── saved_jobs.py           # Candidature salvate
+│   ├── scan_history.py         # Storico scansioni per profilo
+│   ├── discovered_companies.py # Board Lever/Greenhouse dinamiche per profilo
+│   └── search_quota.py         # Tracking quote mensili provider
 ├── config/
 │   ├── user_profile.example.json
 │   ├── target_companies.json
 │   └── career_fields.json
-├── data/                   # Risultati scan e memoria (generati a runtime)
+├── data/                       # Dati runtime (esclusi da Git)
+│   ├── search_quota.json       # Flag provider esauriti (reset mensile)
+│   └── profiles/
+│       ├── registry.json
+│       └── <slug>/
+│           ├── profile.json
+│           ├── memory.json
+│           ├── scan_results.json
+│           ├── scan_history.json
+│           ├── discovered_companies.json
+│           └── saved_jobs.json
 ├── requirements.txt
-├── .env.example            # Template variabili d'ambiente (senza valori)
+├── .env.example                # Template variabili d'ambiente (senza valori)
 └── .gitignore
 ```
 
@@ -234,12 +418,12 @@ ai_proj/
 Per sicurezza, i seguenti file **non vanno caricati su GitHub**:
 
 - `.env` — credenziali API
-- `config/user_profile.json` — dati personali
-- `data/` — risultati delle scansioni e memoria locale
+- `config/user_profile.json` — profilo personale legacy (se presente)
+- `data/` — profili, risultati scan, storico, candidature salvate, memoria e stato quote ricerca
 - `.venv/` — ambiente virtuale Python
 
 Sono già elencati in `.gitignore`.
 
 ## Licenza
 
-Uso personale / educativo. Verifica i termini d'uso delle API DeepSeek e SerpApi prima dell'utilizzo.
+Uso personale / educativo. Verifica i termini d'uso delle API DeepSeek e dei provider di ricerca terzi prima dell'utilizzo.

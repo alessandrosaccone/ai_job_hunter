@@ -64,19 +64,11 @@ def _experience_level_matches(job: JobPosting, profile: UserProfile) -> bool:
     if not detected:
         return True
 
-    desired = profile.experience_level
-    if desired in detected:
-        return True
+    allowed = profile.allowed_experience_levels()
+    if profile.experience_level_rule.mode == "exact":
+        return detected.issubset(allowed)
 
-    compatible: dict[ExperienceLevel, set[ExperienceLevel]] = {
-        "graduate": {"graduate", "entry", "internship"},
-        "internship": {"internship", "entry", "graduate"},
-        "entry": {"entry", "graduate", "internship", "mid"},
-        "mid": {"mid", "entry", "senior"},
-        "senior": {"senior", "mid", "manager"},
-        "manager": {"manager", "senior"},
-    }
-    return bool(detected.intersection(compatible.get(desired, {desired})))
+    return bool(detected.intersection(allowed))
 
 
 def _parse_amount(raw: str) -> int | None:

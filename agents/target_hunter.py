@@ -35,24 +35,72 @@ class TargetHunter(BaseAgent):
         self.max_concurrency = max_concurrency
         self.timeout_seconds = timeout_seconds
 
-    def _load_companies(self, profile: UserProfile) -> list[dict[str, Any]]:
-        if not self.companies_path.exists():
-            logger.warning("[TargetHunter] Companies file not found: %s", self.companies_path)
-            return []
-        with self.companies_path.open(encoding="utf-8") as handle:
-            companies = json.load(handle)
-        return [
-            company
-            for company in companies
-            if profile.career_field in company.get("fields", ["tech"])
-        ]
+    def _load_companies(
+        self,
+        profile: UserProfile,
+        *,
+        discovered_companies: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        static_companies: list[dict[str, Any]] = []
+        if self.companies_path.exists():
+            with self.companies_path.open(encoding="utf-8") as handle:
+                static_companies = json.load(handle)
 
-    async def run(self, profile: UserProfile) -> list[JobPosting]:
-        companies = self._load_companies(profile)
+        merged: dict[str, dict[str, Any]] = {}
+        for company in static_companies:
+            if profile.career_field in company.get("fields", ["tech"]):
+                key = f"{company.get('ats', '').lower()}:{company.get('slug', '').lower()}"
+                merged[key] = company
+
+        for company in discovered_companies or []:
+            if profile.career_field not in company.get("fields", ["tech"]):
+                continue
+            key = f"{company.get('ats', '').lower()}:{company.get('slug', '').lower()}"
+            merged.setdefault(key, company)
+
+        return list(merged.values())
+
+    async def run(
+        self,
+        profile: UserProfile,
+        *,
+        discovered_companies: list[dict[str, Any]] | None = None,
+        extra_companies: list[dict[str, Any]] | None = None,
+    ) -> list[JobPosting]:
+        companies = self._load_companies(profile, discovered_companies=discovered_companies)
+        if extra_companies:
+            known = {
+                f"{company.get('ats', '').lower()}:{company.get('slug', '').lower()}"
+                for company in companies
+            }
+            for company in extra_companies:
+                if profile.career_field not in company.get("fields", ["tech"]):
+                    continue
+                key = f"{company.get('ats', '').lower()}:{company.get('slug', '').lower()}"
+                if key not in known:
+                    companies.append(company)
+                    known.add(key)
+
         if not companies:
             logger.warning("[TargetHunter] No companies configured for field '%s'.", profile.career_field)
             return []
 
+        return await self._fetch_for_companies(profile, companies)
+
+    async def fetch_companies(
+        self,
+        profile: UserProfile,
+        companies: list[dict[str, Any]],
+    ) -> list[JobPosting]:
+        if not companies:
+            return []
+        return await self._fetch_for_companies(profile, companies)
+
+    async def _fetch_for_companies(
+        self,
+        profile: UserProfile,
+        companies: list[dict[str, Any]],
+    ) -> list[JobPosting]:
         semaphore = asyncio.Semaphore(self.max_concurrency)
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             tasks = [
@@ -112,6 +160,31 @@ class TargetHunter(BaseAgent):
             return None
         response.raise_for_status()
         return response.json()
+
+    async def probe_company_access(
+        self,
+        client: httpx.AsyncClient,
+        company: dict[str, Any],
+    ) -> bool:
+        ats = str(company.get("ats", "")).lower()
+        slug = str(company.get("slug", ""))
+        region = str(company.get("region", "us")).lower()
+        if not slug:
+            return False
+
+        if ats == "lever":
+            bases = [LEVER_EU_BASE, LEVER_US_BASE] if region == "eu" else [LEVER_US_BASE, LEVER_EU_BASE]
+            for base in bases:
+                response = await client.get(f"{base}/{slug}?mode=json")
+                if response.status_code == 200:
+                    return True
+            return False
+
+        if ats == "greenhouse":
+            response = await client.get(f"{GREENHOUSE_BASE}/{slug}/jobs?content=true")
+            return response.status_code == 200
+
+        return False
 
     async def _fetch_lever_jobs(
         self,

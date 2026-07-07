@@ -24,6 +24,16 @@ ExperienceLevel = Literal[
     "senior",
     "manager",
 ]
+ExperienceLevelMode = Literal["exact", "or_higher", "all_lower", "or_lower"]
+
+LEVEL_ORDER: list[ExperienceLevel] = [
+    "internship",
+    "graduate",
+    "entry",
+    "mid",
+    "senior",
+    "manager",
+]
 
 DEFAULT_PROFILE_PATH = Path("config/user_profile.json")
 
@@ -34,6 +44,32 @@ class FundamentalCriteria(BaseModel):
     salary: bool = False
     work_mode: bool = False
     experience_level: bool = False
+
+
+class ExperienceLevelRule(BaseModel):
+    mode: ExperienceLevelMode = "or_higher"
+    offset: int = Field(default=1, ge=0, le=5)
+
+
+def allowed_experience_levels(
+    user_level: ExperienceLevel,
+    rule: ExperienceLevelRule,
+) -> set[ExperienceLevel]:
+    idx = LEVEL_ORDER.index(user_level)
+    last = len(LEVEL_ORDER) - 1
+
+    if rule.mode == "exact":
+        indices = {idx}
+    elif rule.mode == "all_lower":
+        indices = set(range(0, idx + 1))
+    elif rule.mode == "or_higher":
+        indices = set(range(idx, min(last, idx + rule.offset) + 1))
+    elif rule.mode == "or_lower":
+        indices = set(range(max(0, idx - rule.offset), idx + 1))
+    else:
+        indices = {idx}
+
+    return {LEVEL_ORDER[i] for i in indices}
 
 
 class UserProfile(BaseModel):
@@ -47,9 +83,22 @@ class UserProfile(BaseModel):
     work_mode: WorkMode = "Remote"
     free_text_preferences: str = ""
     fundamental_criteria: FundamentalCriteria = Field(default_factory=FundamentalCriteria)
+    experience_level_rule: ExperienceLevelRule = Field(default_factory=ExperienceLevelRule)
 
     def location_places(self) -> list[str]:
         return [place.strip() for place in self.location.split(",") if place.strip()]
+
+    def search_location_targets(self) -> list[str]:
+        """Each city/country as its own search target (e.g. Milano, Italy, Spain → 3 queries)."""
+        places = self.location_places()
+        return places if places else ["Italy"]
+
+    def search_location_query(self) -> str:
+        """First search target only — prefer search_location_targets() for queries."""
+        return self.search_location_targets()[0]
+
+    def allowed_experience_levels(self) -> set[ExperienceLevel]:
+        return allowed_experience_levels(self.experience_level, self.experience_level_rule)
 
     @field_validator("target_roles")
     @classmethod

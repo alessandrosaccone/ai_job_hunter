@@ -9,6 +9,7 @@ from urllib.parse import urlparse, urlunparse
 from pydantic import BaseModel, Field, field_validator
 
 JobSource = Literal["lever", "greenhouse", "workday", "serpapi"]
+ApplicationChannel = Literal["human_recruiter", "ats", "mixed", "unknown"]
 DEFAULT_SCAN_RESULTS_PATH = Path("data/scan_results.json")
 
 
@@ -41,6 +42,11 @@ class MatchResult(BaseModel):
     match_score: float = Field(ge=0, le=10)
     approved: bool
     reasoning: str
+    salary_indicated: bool = True
+    estimated_salary_eur: str | None = None
+    salary_research_summary: str | None = None
+    application_channel: ApplicationChannel = "unknown"
+    cv_strategy: str | None = None
 
 
 class ScanResult(BaseModel):
