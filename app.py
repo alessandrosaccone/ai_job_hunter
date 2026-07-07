@@ -295,6 +295,30 @@ def _render_provider_stats(stats: dict) -> None:
         st.caption("Include ricerca annunci (Startup Discoverer) e ricerca RAL.")
 
 
+def _match_score_threshold() -> float:
+    return float(os.getenv("MATCH_SCORE_THRESHOLD", "7"))
+
+
+def _truncate_log_text(text: str, limit: int = 180) -> str:
+    cleaned = " ".join(text.split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return f"{cleaned[: limit - 1]}…"
+
+
+def _format_ai_rejection_log(result: MatchResult, *, promoted: bool) -> str | None:
+    if promoted:
+        return None
+    headline = f"{result.job.title} @ {result.job.company}"
+    reason = _truncate_log_text(result.reasoning or "Nessuna motivazione disponibile.")
+    if not result.approved:
+        return f"SCARTATO AI [{result.match_score:.1f}] {headline} — {reason}"
+    threshold = _match_score_threshold()
+    return (
+        f"SOTTO SOGLIA [{result.match_score:.1f}<{threshold:g}] {headline} — {reason}"
+    )
+
+
 def _score_color(score: float) -> str:
     if score >= 8:
         return "#16a34a"
@@ -534,6 +558,48 @@ def _card_key(result: MatchResult, prefix: str, suffix: str = "") -> str:
     return "-".join(parts)
 
 
+def _ral_summary(result: MatchResult, manual_salary: str | None) -> tuple[str, str]:
+    if manual_salary:
+        return manual_salary, "tua"
+    if result.salary_indicated and result.job.salary_hint:
+        return result.job.salary_hint, "annuncio"
+    if result.estimated_salary_eur:
+        return result.estimated_salary_eur, "stima"
+    return "non indicata", "mancante"
+
+
+def _ral_expander_label(result: MatchResult, manual_salary: str | None) -> str:
+    value, kind = _ral_summary(result, manual_salary)
+    if kind == "tua":
+        return f"RAL — {value} (tua)"
+    if kind == "stima":
+        return f"RAL — {value} (stima)"
+    if kind == "annuncio":
+        return f"RAL — {value}"
+    return "RAL — non indicata"
+
+
+def _render_salary_details(
+    result: MatchResult,
+    manual_salary: str | None,
+) -> None:
+    if manual_salary:
+        st.markdown(f"**RAL annotata da te:** {manual_salary}")
+        st.caption("Hai inserito questo valore manualmente dopo aver aperto l'annuncio.")
+    elif result.salary_indicated and result.job.salary_hint:
+        st.markdown(f"**RAL nell'annuncio:** {result.job.salary_hint}")
+    elif result.estimated_salary_eur:
+        st.markdown(f"**Stima da ricerca web:** {result.estimated_salary_eur}")
+        st.caption("Stima automatica da fonti esterne (Glassdoor, Levels.fyi, ecc.), non dall'annuncio.")
+    else:
+        st.caption("RAL non rilevata automaticamente. Apri l'annuncio e inseriscila sotto se la trovi.")
+    if result.salary_research_summary and not manual_salary:
+        st.markdown("**Dettaglio ricerca**")
+        st.caption(result.salary_research_summary)
+    if not result.salary_indicated and not manual_salary and not result.estimated_salary_eur:
+        st.caption("La mancanza di trasparenza sulla RAL può incidere sul punteggio di match.")
+
+
 @st.fragment
 def _render_save_button(
     result: MatchResult,
@@ -603,18 +669,14 @@ def _render_match_card(
     )
     key = _card_key(result, key_prefix, key_suffix)
     manual_salary = salary_store.get(result.job.dedup_key) if salary_store else None
-    with st.expander("RAL", expanded=bool(manual_salary) or not result.salary_indicated):
-        if manual_salary:
-            st.markdown(f"**RAL annotata da te:** {manual_salary}")
-        elif result.salary_indicated and result.job.salary_hint:
-            st.markdown(f"**RAL nell'annuncio:** {result.job.salary_hint}")
-        elif result.estimated_salary_eur:
-            st.markdown(f"**Stima da ricerca web:** {result.estimated_salary_eur}")
-        elif not result.salary_indicated:
-            st.caption("RAL non rilevata automaticamente.")
-        if result.salary_research_summary and not manual_salary:
-            st.caption(result.salary_research_summary)
+    with st.expander(
+        _ral_expander_label(result, manual_salary),
+        expanded=False,
+        key=f"ral-{key}",
+    ):
+        _render_salary_details(result, manual_salary)
         if salary_store is not None:
+            st.markdown("**Modifica RAL**")
             _render_salary_editor(result, salary_store, key=key)
     channel = result.application_channel
     if channel != "unknown" or result.cv_strategy:
@@ -668,7 +730,7 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
 
     def append_log(message: str) -> None:
         log_lines.append(message)
-        log_box.code("\n".join(log_lines[-14:]), language=None)
+        log_box.code("\n".join(log_lines[-24:]), language=None)
 
     def refresh_metrics() -> None:
         found_metric.metric("Trovati", totals["found"])
@@ -722,6 +784,13 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
         elif event == "match":
             totals["analyzed"] = payload["current"]
             refresh_metrics()
+            result = MatchResult.model_validate(payload["result"])
+            rejection_line = _format_ai_rejection_log(
+                result,
+                promoted=bool(payload.get("promoted")),
+            )
+            if rejection_line:
+                append_log(rejection_line)
         elif event == "promoted":
             result = MatchResult.model_validate(payload["result"])
             live_matches.append(result)

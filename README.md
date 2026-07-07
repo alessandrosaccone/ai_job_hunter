@@ -66,6 +66,7 @@ On the next scan, already-analyzed URLs are **skipped automatically**. Collectio
 - **Experience-level rules** — Filter by exact level, lower levels, or N steps above/below your level.
 - **Salary transparency** — Web research via the provider chain when RAL is missing; modest score penalty for lack of transparency.
 - **Manual RAL overrides** — On any match card (Dashboard, Log match, Salvati), open the **RAL** expander to enter or correct salary after reading the posting (e.g. when AI/web research missed it). Saved per job URL in `salary_overrides.json`; used for display and **sort by RAL** (manual values take priority).
+- **Expandable match details** — Each job card shows title, company, and score by default; **RAL**, **Che CV inviare?**, and **Motivazione AI** are in separate collapsible sections — click to expand each one.
 - **CV strategy hints** — Application channel detection (ATS / recruiter / mixed) with practical CV advice.
 - **Legacy migration** — Existing `config/user_profile.json` and `data/` files are migrated automatically to the default profile on first run.
 
@@ -149,7 +150,21 @@ The app opens in your browser (default: `http://localhost:8501`).
 3. Go to the **Profilo** tab, fill in the fields, and save.
 4. Go to the **Dashboard** tab and click **Avvia Scansione**.
 5. Review promoted matches, save interesting ones in **Salvati**, and browse past scans in **Log match**.
-6. If RAL is wrong or missing, open **RAL** on a match card → enter value (e.g. `55000` or `45000-52000 EUR`) → **Salva RAL**.
+6. On each match card, **click the expanders** to read details: **RAL** (salary + manual edit), **Che CV inviare?**, **Motivazione AI**.
+
+### Match cards — click to expand
+
+Every promoted or saved job appears as a **card** with the role, company, location, and match score always visible. Extra information is hidden in expanders — **you must click each section** to open it:
+
+| Expander | Contents |
+|----------|----------|
+| **RAL — …** | Known or estimated salary in the title; inside: source (posting, web estimate, or your manual entry), research notes, and **Modifica RAL** to correct after opening the job page |
+| **Che CV inviare?** | Likely application channel (ATS / recruiter / mixed) and CV style tips |
+| **Motivazione AI** | Full AI reasoning for the match score and approval decision |
+
+**Apri annuncio** and **Salva candidatura** are always visible without expanding.
+
+During a scan, the **activity log** also lists **SCARTATO AI** and **SOTTO SOGLIA** entries with a short rejection reason for jobs not promoted.
 
 ### Manual RAL on match cards
 
@@ -296,6 +311,7 @@ Alla scansione successiva, gli URL già analizzati vengono **saltati automaticam
 - **Regole livello esperienza** — Filtra per livello esatto, livelli inferiori, o X gradini sopra/sotto il tuo.
 - **Trasparenza RAL** — Ricerca web tramite la catena di provider quando la RAL manca; penalità leggera sul punteggio.
 - **RAL annotata manualmente** — Su ogni card (Dashboard, Log match, Salvati), expander **RAL** per inserire o correggere lo stipendio dopo aver aperto l'annuncio. Salvata per URL in `salary_overrides.json`; usata in visualizzazione e **ordinamento per RAL** (priorità sulla stima automatica).
+- **Dettagli espandibili per annuncio** — Ogni card mostra titolo, azienda e punteggio; **RAL**, **Che CV inviare?** e **Motivazione AI** sono sezioni a riquadro: **devi cliccare** per aprirle e leggere il contenuto.
 - **Suggerimenti CV** — Rilevamento canale candidatura (ATS / recruiter / misto) con consigli pratici.
 - **Migrazione legacy** — Un eventuale `config/user_profile.json` e i file in `data/` vengono migrati automaticamente al profilo predefinito al primo avvio.
 
@@ -379,7 +395,21 @@ L'app si apre nel browser (di default su `http://localhost:8501`).
 3. Vai alla tab **Profilo**, compila i campi e salva.
 4. Vai alla tab **Dashboard** e clicca **Avvia Scansione**.
 5. Esamina i match promossi, salva quelli interessanti in **Salvati** e consulta le scansioni passate in **Log match**.
-6. Se la RAL manca o è sbagliata, apri **RAL** sulla card → inserisci il valore → **Salva RAL**.
+6. Su ogni card, **clicca i riquadri espandibili** per i dettagli: **RAL**, **Che CV inviare?**, **Motivazione AI**.
+
+### Card annuncio — clicca per espandere
+
+Ogni lavoro promosso o salvato compare come **card** con ruolo, azienda, sede e punteggio match sempre visibili. Il resto è in sezioni collassate: **bisogna cliccare** su ciascuna per aprirla:
+
+| Riquadro | Contenuto |
+|----------|-----------|
+| **RAL — …** | Nel titolo la RAL nota o stimata; dentro: fonte (annuncio, stima web, o valore inserito da te), note di ricerca e **Modifica RAL** |
+| **Che CV inviare?** | Canale probabile (ATS / recruiter / misto) e consigli sul tipo di CV |
+| **Motivazione AI** | Motivazione completa del punteggio e della decisione AI |
+
+**Apri annuncio** e **Salva candidatura** restano sempre visibili senza espandere.
+
+Durante la scansione, il **log attività** elenca anche **SCARTATO AI** e **SOTTO SOGLIA** con una breve motivazione per gli annunci non promossi.
 
 ### RAL manuale sulle card
 
