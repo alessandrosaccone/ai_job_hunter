@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
@@ -108,6 +109,96 @@ def _inject_styles() -> None:
         .score-badge {
             display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px;
             font-weight: 600; color: white; background: #16a34a;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) {
+            border: 1px solid #e5e7eb !important;
+            border-radius: 12px !important;
+            background: #ffffff !important;
+            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+            margin-bottom: 1rem;
+            overflow: hidden;
+            position: relative;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) .job-match-header {
+            padding: 1rem 1.2rem;
+            pointer-events: none;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) .job-match-header-inner {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1.25rem;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) .job-match-title {
+            margin: 0 0 0.25rem 0;
+            font-size: 1.55rem;
+            font-weight: 700;
+            line-height: 1.25;
+            color: #111827;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) .job-match-company {
+            margin: 0;
+            color: #4b5563;
+            font-size: 1.05rem;
+            font-weight: 500;
+            line-height: 1.4;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) .job-match-score {
+            font-size: 0.95rem;
+            padding: 0.35rem 0.75rem;
+            flex-shrink: 0;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) [data-testid="stElementContainer"]:has(.job-match-header) + [data-testid="stElementContainer"] {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 2;
+            margin: 0 !important;
+            padding: 0 !important;
+            min-height: 5.5rem;
+            height: 6.5rem;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) [data-testid="stElementContainer"]:has(.job-match-header) + [data-testid="stElementContainer"] [data-testid="stButton"] {
+            width: 100%;
+            height: 100%;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) [data-testid="stElementContainer"]:has(.job-match-header) + [data-testid="stElementContainer"] [data-testid="stButton"] > button {
+            width: 100% !important;
+            min-height: 6.5rem !important;
+            height: 100% !important;
+            opacity: 0 !important;
+            border: none !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            cursor: pointer !important;
+            padding: 0 !important;
+            margin: 0 !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) [data-testid="stElementContainer"]:has(.job-match-header) + [data-testid="stElementContainer"] [data-testid="stButton"] > button:hover {
+            background: rgba(249, 250, 251, 0.55) !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) .job-match-details-marker {
+            display: none;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) [data-testid="stElementContainer"]:has(.job-match-details-marker) ~ [data-testid="stElementContainer"] {
+            padding-left: 1.2rem;
+            padding-right: 1.2rem;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) [data-testid="stElementContainer"]:has(.job-match-details-marker) ~ [data-testid="stElementContainer"]:last-child {
+            padding-bottom: 1rem;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) [data-testid="stElementContainer"]:has(.job-match-details-marker) ~ [data-testid="stElementContainer"] [data-testid="stExpander"] > details {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            box-shadow: none;
+            margin-bottom: 0.5rem;
+            background: #fafafa;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) [data-testid="stElementContainer"]:has(.job-match-details-marker) ~ [data-testid="stElementContainer"] [data-testid="stExpander"] > details > summary {
+            font-size: 0.95rem;
+            font-weight: 600;
+            padding: 0.55rem 0.75rem;
         }
         section[data-testid="stSidebar"] button[aria-label="Elimina profilo e tutti i suoi dati"] {
             border: 1px solid #fecaca !important;
@@ -641,34 +732,56 @@ def _render_salary_editor(
             st.rerun()
 
 
-def _render_match_card(
-    result: MatchResult,
-    saved_store: SavedJobsStore | None = None,
-    salary_store: SalaryOverrideStore | None = None,
-    *,
-    allow_save: bool = True,
-    key_prefix: str = "card",
-    key_suffix: str = "",
-) -> None:
+def _job_open_key(card_key: str) -> str:
+    return f"job-open-{card_key}"
+
+
+def _toggle_job_card(card_key: str) -> None:
+    state_key = _job_open_key(card_key)
+    st.session_state[state_key] = not st.session_state.get(state_key, False)
+
+
+def _render_match_card_header(result: MatchResult, css_id: str, card_key: str) -> None:
     color = _score_color(result.match_score)
+    company_line = html.escape(f"{result.job.company} · {result.job.location}")
+    title = html.escape(result.job.title)
+    score_text = f"{result.match_score:.1f}/10"
     st.markdown(
         f"""
-        <div class="job-card">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-                <div>
-                    <h3 style="margin:0;">{result.job.title}</h3>
-                    <p style="margin:0.2rem 0;color:#4b5563;">{result.job.company} · {result.job.location}</p>
+        <div id="{css_id}" class="job-match-card-block"></div>
+        <div class="job-match-header">
+            <div class="job-match-header-inner">
+                <div class="job-match-header-text">
+                    <h3 class="job-match-title">{title}</h3>
+                    <p class="job-match-company">{company_line}</p>
                 </div>
-                <span class="score-badge" style="background:{color};">
-                    Score {result.match_score:.1f}/10
+                <span class="score-badge job-match-score" style="background:{color};">
+                    Score {score_text}
                 </span>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    key = _card_key(result, key_prefix, key_suffix)
-    manual_salary = salary_store.get(result.job.dedup_key) if salary_store else None
+    st.button(
+        "Mostra dettagli",
+        key=f"job-toggle-{card_key}",
+        on_click=_toggle_job_card,
+        args=(card_key,),
+        use_container_width=True,
+        type="tertiary",
+    )
+
+
+def _render_match_card_details(
+    result: MatchResult,
+    saved_store: SavedJobsStore | None,
+    salary_store: SalaryOverrideStore | None,
+    *,
+    allow_save: bool,
+    key: str,
+    manual_salary: str | None,
+) -> None:
     with st.expander(
         _ral_expander_label(result, manual_salary),
         expanded=False,
@@ -678,6 +791,7 @@ def _render_match_card(
         if salary_store is not None:
             st.markdown("**Modifica RAL**")
             _render_salary_editor(result, salary_store, key=key)
+
     channel = result.application_channel
     if channel != "unknown" or result.cv_strategy:
         channel_label = APPLICATION_CHANNEL_LABELS.get(channel, APPLICATION_CHANNEL_LABELS["unknown"])
@@ -691,6 +805,10 @@ def _render_match_card(
                 st.write(result.cv_strategy)
             elif channel == "unknown":
                 st.write("Segnali insufficienti per consigliare un tipo di CV specifico.")
+
+    with st.expander("Motivazione AI", expanded=False, key=f"reason-{key}"):
+        st.write(result.reasoning)
+
     action_col1, action_col2 = st.columns([1, 1])
     with action_col1:
         st.link_button(
@@ -702,8 +820,35 @@ def _render_match_card(
     with action_col2:
         if allow_save and saved_store is not None:
             _render_save_button(result, saved_store, key=key)
-    with st.expander("Motivazione AI", expanded=False, key=f"reason-{key}"):
-        st.write(result.reasoning)
+
+
+@st.fragment
+def _render_match_card(
+    result: MatchResult,
+    saved_store: SavedJobsStore | None = None,
+    salary_store: SalaryOverrideStore | None = None,
+    *,
+    allow_save: bool = True,
+    key_prefix: str = "card",
+    key_suffix: str = "",
+) -> None:
+    key = _card_key(result, key_prefix, key_suffix)
+    manual_salary = salary_store.get(result.job.dedup_key) if salary_store else None
+    css_id = f"jmc-{hashlib.md5(key.encode()).hexdigest()[:12]}"
+    is_open = st.session_state.get(_job_open_key(key), False)
+
+    with st.container(border=True):
+        _render_match_card_header(result, css_id, key)
+        if is_open:
+            st.markdown('<div class="job-match-details-marker"></div>', unsafe_allow_html=True)
+            _render_match_card_details(
+                result,
+                saved_store,
+                salary_store,
+                allow_save=allow_save,
+                key=key,
+                manual_salary=manual_salary,
+            )
 
 
 def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | None:
