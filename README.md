@@ -65,6 +65,7 @@ On the next scan, already-analyzed URLs are **skipped automatically**. Collectio
 - **Saved applications** — Bookmark interesting matches; saved jobs are marked as seen and skipped in future scans.
 - **Experience-level rules** — Filter by exact level, lower levels, or N steps above/below your level.
 - **Salary transparency** — Web research via the provider chain when RAL is missing; modest score penalty for lack of transparency.
+- **Manual RAL overrides** — On any match card (Dashboard, Log match, Salvati), open the **RAL** expander to enter or correct salary after reading the posting (e.g. when AI/web research missed it). Saved per job URL in `salary_overrides.json`; used for display and **sort by RAL** (manual values take priority).
 - **CV strategy hints** — Application channel detection (ATS / recruiter / mixed) with practical CV advice.
 - **Legacy migration** — Existing `config/user_profile.json` and `data/` files are migrated automatically to the default profile on first run.
 
@@ -148,6 +149,17 @@ The app opens in your browser (default: `http://localhost:8501`).
 3. Go to the **Profilo** tab, fill in the fields, and save.
 4. Go to the **Dashboard** tab and click **Avvia Scansione**.
 5. Review promoted matches, save interesting ones in **Salvati**, and browse past scans in **Log match**.
+6. If RAL is wrong or missing, open **RAL** on a match card → enter value (e.g. `55000` or `45000-52000 EUR`) → **Salva RAL**.
+
+### Manual RAL on match cards
+
+When automatic detection or web research does not show the salary but you find it on the job page:
+
+1. Expand **RAL** on the match card.
+2. Type the amount (single value or range, with or without `EUR`).
+3. Click **Salva RAL**.
+
+Your entry is stored per profile and job URL, persists across scans, appears as **RAL annotata da te**, and is used when sorting by **RAL (più alta prima, senza RAL in fondo)**. Use **Rimuovi RAL** to revert to automatic data.
 
 ## Project structure
 
@@ -174,6 +186,7 @@ ai_proj/
 │   ├── memory.py               # Seen-job memory per profile
 │   ├── profile_registry.py     # Multi-profile registry and paths
 │   ├── saved_jobs.py           # Bookmarked applications
+│   ├── salary_overrides.py     # Manual RAL per job URL (per profile)
 │   ├── scan_history.py         # Scan history per profile
 │   ├── discovered_companies.py # Dynamic Lever/Greenhouse boards per profile
 │   └── search_quota.py         # Monthly provider quota tracking
@@ -191,6 +204,7 @@ ai_proj/
 │           ├── scan_results.json
 │           ├── scan_history.json
 │           ├── discovered_companies.json
+│           ├── salary_overrides.json
 │           └── saved_jobs.json
 ├── requirements.txt
 ├── .env.example                # Environment variable template (no secrets)
@@ -281,6 +295,7 @@ Alla scansione successiva, gli URL già analizzati vengono **saltati automaticam
 - **Candidature salvate** — Salva i match interessanti; gli annunci salvati vengono marcati come già visti e non rianalizzati.
 - **Regole livello esperienza** — Filtra per livello esatto, livelli inferiori, o X gradini sopra/sotto il tuo.
 - **Trasparenza RAL** — Ricerca web tramite la catena di provider quando la RAL manca; penalità leggera sul punteggio.
+- **RAL annotata manualmente** — Su ogni card (Dashboard, Log match, Salvati), expander **RAL** per inserire o correggere lo stipendio dopo aver aperto l'annuncio. Salvata per URL in `salary_overrides.json`; usata in visualizzazione e **ordinamento per RAL** (priorità sulla stima automatica).
 - **Suggerimenti CV** — Rilevamento canale candidatura (ATS / recruiter / misto) con consigli pratici.
 - **Migrazione legacy** — Un eventuale `config/user_profile.json` e i file in `data/` vengono migrati automaticamente al profilo predefinito al primo avvio.
 
@@ -364,6 +379,17 @@ L'app si apre nel browser (di default su `http://localhost:8501`).
 3. Vai alla tab **Profilo**, compila i campi e salva.
 4. Vai alla tab **Dashboard** e clicca **Avvia Scansione**.
 5. Esamina i match promossi, salva quelli interessanti in **Salvati** e consulta le scansioni passate in **Log match**.
+6. Se la RAL manca o è sbagliata, apri **RAL** sulla card → inserisci il valore → **Salva RAL**.
+
+### RAL manuale sulle card
+
+Se l'AI o la ricerca web non hanno trovato la RAL ma la vedi aprendo l'annuncio:
+
+1. Apri l'expander **RAL** sulla card del match.
+2. Inserisci l'importo (es. `55000` o `45000-52000 EUR`).
+3. Clicca **Salva RAL**.
+
+La RAL resta salvata per profilo e URL dell'annuncio, compare come **RAL annotata da te** e viene usata nell'ordinamento **RAL (più alta prima, senza RAL in fondo)**. **Rimuovi RAL** ripristina i dati automatici.
 
 ## Struttura del progetto
 
@@ -390,6 +416,7 @@ ai_proj/
 │   ├── memory.py               # Memoria annunci visti per profilo
 │   ├── profile_registry.py     # Registry profili multipli e percorsi file
 │   ├── saved_jobs.py           # Candidature salvate
+│   ├── salary_overrides.py     # RAL manuale per URL annuncio (per profilo)
 │   ├── scan_history.py         # Storico scansioni per profilo
 │   ├── discovered_companies.py # Board Lever/Greenhouse dinamiche per profilo
 │   └── search_quota.py         # Tracking quote mensili provider
@@ -407,6 +434,7 @@ ai_proj/
 │           ├── scan_results.json
 │           ├── scan_history.json
 │           ├── discovered_companies.json
+│           ├── salary_overrides.json
 │           └── saved_jobs.json
 ├── requirements.txt
 ├── .env.example                # Template variabili d'ambiente (senza valori)

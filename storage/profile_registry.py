@@ -26,6 +26,7 @@ class ProfilePaths:
     scan_results_path: Path
     scan_history_path: Path
     discovered_companies_path: Path
+    salary_overrides_path: Path
 
 
 def slugify(name: str) -> str:
@@ -50,6 +51,7 @@ def _paths_for(slug: str, display_name: str) -> ProfilePaths:
         scan_results_path=root / "scan_results.json",
         scan_history_path=root / "scan_history.json",
         discovered_companies_path=root / "discovered_companies.json",
+        salary_overrides_path=root / "salary_overrides.json",
     )
 
 

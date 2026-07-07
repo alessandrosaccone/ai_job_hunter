@@ -296,15 +296,20 @@ class JobListingExpander:
         return fallback or "Offerta di lavoro"
 
 
-def match_salary_sort_key(result: Any) -> tuple[int, int]:
+def match_salary_sort_key(result: Any, manual_salary: str | None = None) -> tuple[int, int]:
     """Higher salaries first; entries without RAL last."""
-    amount = _match_salary_midpoint(result)
+    amount = _match_salary_midpoint(result, manual_salary=manual_salary)
     if amount is None:
         return (1, 0)
     return (0, -amount)
 
 
-def _match_salary_midpoint(result: Any) -> int | None:
+def _match_salary_midpoint(result: Any, manual_salary: str | None = None) -> int | None:
+    if manual_salary:
+        parsed = _extract_salary_range(str(manual_salary))
+        if parsed:
+            return (parsed[0] + parsed[1]) // 2
+
     estimated = getattr(result, "estimated_salary_eur", None)
     if estimated:
         parsed = _extract_salary_range(str(estimated))

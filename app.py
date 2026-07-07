@@ -24,6 +24,7 @@ from agents.job_listing_expander import match_salary_sort_key
 from agents.search_providers.router import JobSearchRouter
 from storage.search_quota import clear_provider_exhausted, exhausted_providers
 from storage.saved_jobs import SavedJobsStore
+from storage.salary_overrides import SalaryOverrideStore
 from storage.scan_history import ROME, ScanHistoryStore, format_italian_date
 
 load_dotenv()
@@ -47,8 +48,8 @@ EXPERIENCE_LEVEL_RULE_OPTIONS = [
     ("or_higher", "Questo livello o X superiori"),
 ]
 SEARCH_MODE_OPTIONS = [
-    ("full", "Completa — Target Hunter + ricerche web (Startup Discoverer, RAL)"),
-    ("no_search", "Senza ricerche web — solo API ATS (Lever/Greenhouse) + AI"),
+    ("full", "Completa — Target Hunter + ricerche web (Startup Discoverer, RAL, scoperta ATS da Google)"),
+    ("no_search", "Senza ricerche web — Target Hunter (Lever/Greenhouse) + AI, niente Google/RAL online"),
 ]
 MATCH_SORT_OPTIONS = [
     ("match_desc", "Punteggio match (migliori prima)"),
@@ -152,6 +153,10 @@ def _api_key_status(label: str, env_name: str) -> None:
 
 def _saved_store(paths: ProfilePaths) -> SavedJobsStore:
     return SavedJobsStore(paths.saved_jobs_path, JobMemory(paths.memory_path))
+
+
+def _salary_store(paths: ProfilePaths) -> SalaryOverrideStore:
+    return SalaryOverrideStore(paths.salary_overrides_path)
 
 
 @st.fragment
@@ -298,13 +303,24 @@ def _score_color(score: float) -> str:
     return "#dc2626"
 
 
-def _sort_matches(matches: list[MatchResult], mode: str) -> list[MatchResult]:
+def _sort_matches(
+    matches: list[MatchResult],
+    mode: str,
+    salary_overrides: dict[str, str] | None = None,
+) -> list[MatchResult]:
+    overrides = salary_overrides or {}
     if mode == "match_desc":
         return sorted(matches, key=lambda item: item.match_score, reverse=True)
     if mode == "match_asc":
         return sorted(matches, key=lambda item: item.match_score)
     if mode == "salary_desc":
-        return sorted(matches, key=match_salary_sort_key)
+        return sorted(
+            matches,
+            key=lambda item: match_salary_sort_key(
+                item,
+                overrides.get(item.job.dedup_key.lower()),
+            ),
+        )
     if mode == "company":
         return sorted(matches, key=lambda item: item.job.company.lower())
     if mode == "title":
@@ -413,8 +429,10 @@ def render_profile_tab(paths: ProfilePaths) -> None:
             options=search_mode_labels,
             index=search_mode_index,
             help=(
-                "Senza ricerche web: niente Startup Discoverer, niente ricerca RAL online. "
-                "Usa solo annunci dalle API ATS delle aziende target (e board già scoperte)."
+                "In entrambe le modalità c'è sempre il Target Hunter (API Lever/Greenhouse "
+                "delle aziende in target_companies.json e board già scoperte). "
+                "Senza ricerche web: niente Startup Discoverer, niente ricerca RAL online, "
+                "niente scoperta di nuove aziende da Google."
             ),
         )
         selected_search_mode = search_mode_keys[search_mode_labels.index(selected_search_label)]
@@ -530,9 +548,37 @@ def _render_save_button(
         st.toast(f"Salvata: {result.job.title} @ {result.job.company}")
 
 
+@st.fragment
+def _render_salary_editor(
+    result: MatchResult,
+    salary_store: SalaryOverrideStore,
+    *,
+    key: str,
+) -> None:
+    manual = salary_store.get(result.job.dedup_key)
+    new_val = st.text_input(
+        "RAL (lorda/anno)",
+        value=manual or "",
+        placeholder="es. 55000 oppure 45000-52000 EUR",
+        key=f"salary-input-{key}",
+    )
+    save_col, clear_col = st.columns(2)
+    with save_col:
+        if st.button("Salva RAL", use_container_width=True, key=f"salary-save-{key}"):
+            salary_store.set(result.job.dedup_key, new_val)
+            st.toast("RAL salvata per questo annuncio.")
+            st.rerun()
+    with clear_col:
+        if manual and st.button("Rimuovi RAL", use_container_width=True, key=f"salary-clear-{key}"):
+            salary_store.remove(result.job.dedup_key)
+            st.toast("RAL rimossa.")
+            st.rerun()
+
+
 def _render_match_card(
     result: MatchResult,
     saved_store: SavedJobsStore | None = None,
+    salary_store: SalaryOverrideStore | None = None,
     *,
     allow_save: bool = True,
     key_prefix: str = "card",
@@ -555,20 +601,21 @@ def _render_match_card(
         """,
         unsafe_allow_html=True,
     )
-    if not result.salary_indicated:
-        st.caption("**RAL non indicata nell'annuncio**")
-        if result.estimated_salary_eur:
-            st.caption(f"Stima da ricerca web (azienda/ruolo): **{result.estimated_salary_eur}**")
-        if result.salary_research_summary:
-            st.caption(result.salary_research_summary)
-        elif not result.estimated_salary_eur:
-            st.caption(
-                "Nessuna stima affidabile da fonti esterne; la mancanza di trasparenza "
-                "può essere un fattore negativo."
-            )
-        else:
-            st.caption("La mancanza di trasparenza sulla RAL può essere un fattore negativo.")
     key = _card_key(result, key_prefix, key_suffix)
+    manual_salary = salary_store.get(result.job.dedup_key) if salary_store else None
+    with st.expander("RAL", expanded=bool(manual_salary) or not result.salary_indicated):
+        if manual_salary:
+            st.markdown(f"**RAL annotata da te:** {manual_salary}")
+        elif result.salary_indicated and result.job.salary_hint:
+            st.markdown(f"**RAL nell'annuncio:** {result.job.salary_hint}")
+        elif result.estimated_salary_eur:
+            st.markdown(f"**Stima da ricerca web:** {result.estimated_salary_eur}")
+        elif not result.salary_indicated:
+            st.caption("RAL non rilevata automaticamente.")
+        if result.salary_research_summary and not manual_salary:
+            st.caption(result.salary_research_summary)
+        if salary_store is not None:
+            _render_salary_editor(result, salary_store, key=key)
     channel = result.application_channel
     if channel != "unknown" or result.cv_strategy:
         channel_label = APPLICATION_CHANNEL_LABELS.get(channel, APPLICATION_CHANNEL_LABELS["unknown"])
@@ -613,6 +660,7 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
     results_container = st.container()
 
     saved_store = _saved_store(paths)
+    salary_store = _salary_store(paths)
 
     log_lines: list[str] = []
     live_matches: list[MatchResult] = []
@@ -690,6 +738,7 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
                 _render_match_card(
                     result,
                     saved_store,
+                    salary_store,
                     key_prefix="scan-live",
                     key_suffix=str(len(live_matches) - 1),
                 )
@@ -763,6 +812,8 @@ def render_saved_tab(paths: ProfilePaths) -> None:
     )
 
     saved_store = _saved_store(paths)
+    salary_store = _salary_store(paths)
+    salary_overrides = salary_store.as_dict()
     applications = saved_store.list_sorted()
 
     if not applications:
@@ -780,7 +831,13 @@ def render_saved_tab(paths: ProfilePaths) -> None:
     elif sort_mode == "match_asc":
         applications = sorted(applications, key=lambda app: app.match.match_score)
     elif sort_mode == "salary_desc":
-        applications = sorted(applications, key=lambda app: match_salary_sort_key(app.match))
+        applications = sorted(
+            applications,
+            key=lambda app: match_salary_sort_key(
+                app.match,
+                salary_overrides.get(app.match.job.dedup_key.lower()),
+            ),
+        )
     elif sort_mode == "saved_asc":
         applications = sorted(applications, key=lambda app: app.saved_at)
     else:
@@ -793,6 +850,7 @@ def render_saved_tab(paths: ProfilePaths) -> None:
         _render_match_card(
             result,
             saved_store,
+            salary_store,
             allow_save=False,
             key_prefix="saved",
             key_suffix=str(index),
@@ -818,6 +876,8 @@ def render_history_tab(paths: ProfilePaths) -> None:
     history = ScanHistoryStore(paths.scan_history_path)
     history.migrate_if_needed(paths.memory_path, paths.scan_results_path)
     saved_store = _saved_store(paths)
+    salary_store = _salary_store(paths)
+    salary_overrides = salary_store.as_dict()
     grouped = history.group_by_day()
 
     if not grouped:
@@ -844,7 +904,12 @@ def render_history_tab(paths: ProfilePaths) -> None:
                 for result in scan.matches:
                     flat_matches.append((result, scan_label))
         if layout_mode == "salary_desc":
-            flat_matches.sort(key=lambda item: match_salary_sort_key(item[0]))
+            flat_matches.sort(
+                key=lambda item: match_salary_sort_key(
+                    item[0],
+                    salary_overrides.get(item[0].job.dedup_key.lower()),
+                ),
+            )
         else:
             flat_matches.sort(
                 key=lambda item: item[0].match_score,
@@ -866,6 +931,7 @@ def render_history_tab(paths: ProfilePaths) -> None:
                     _render_match_card(
                         result,
                         saved_store,
+                        salary_store,
                         key_prefix="history-flat",
                         key_suffix=str(index),
                     )
@@ -897,11 +963,16 @@ def render_history_tab(paths: ProfilePaths) -> None:
                     expanded=False,
                     key=f"hist-scan-{paths.slug}-{day.isoformat()}-{scan_index}",
                 ):
-                    sorted_matches = _sort_matches(scan.matches, within_scan_sort)
+                    sorted_matches = _sort_matches(
+                        scan.matches,
+                        within_scan_sort,
+                        salary_overrides,
+                    )
                     for match_index, result in enumerate(sorted_matches):
                         _render_match_card(
                             result,
                             saved_store,
+                            salary_store,
                             key_prefix="history",
                             key_suffix=f"{day.isoformat()}-{scan_index}-{match_index}",
                         )
@@ -929,6 +1000,8 @@ def render_dashboard_tab(paths: ProfilePaths) -> None:
     )
 
     saved_store = _saved_store(paths)
+    salary_store = _salary_store(paths)
+    salary_overrides = salary_store.as_dict()
 
     if st.button(
         "Avvia Scansione",
@@ -968,11 +1041,13 @@ def render_dashboard_tab(paths: ProfilePaths) -> None:
         live_matches = _sort_matches(
             [MatchResult.model_validate(item) for item in live_data],
             sort_mode,
+            salary_overrides,
         )
         for index, result in enumerate(live_matches):
             _render_match_card(
                 result,
                 saved_store,
+                salary_store,
                 key_prefix="dash-live",
                 key_suffix=str(index),
             )
@@ -984,11 +1059,12 @@ def render_dashboard_tab(paths: ProfilePaths) -> None:
 
     st.markdown("#### Match promossi")
     sort_mode = _render_sort_selectbox(MATCH_SORT_OPTIONS, f"dash_sort_{paths.slug}")
-    sorted_matches = _sort_matches(scan_result.matches, sort_mode)
+    sorted_matches = _sort_matches(scan_result.matches, sort_mode, salary_overrides)
     for index, result in enumerate(sorted_matches):
         _render_match_card(
             result,
             saved_store,
+            salary_store,
             key_prefix="dash",
             key_suffix=str(index),
         )
