@@ -1,0 +1,85 @@
+{
+  "tech": {
+    "label": "Tech / Engineering",
+    "passions": [
+      "AI / Machine Learning",
+      "Fintech",
+      "Developer Tools",
+      "Cybersecurity",
+      "Gaming",
+      "Data Engineering",
+      "Cloud Infrastructure",
+      "Open Source"
+    ],
+    "role_hints": ["software engineer", "backend developer", "data engineer"]
+  },
+  "management": {
+    "label": "Management / Leadership",
+    "passions": [
+      "Product Strategy",
+      "Team Leadership",
+      "Operations",
+      "Agile / Scrum",
+      "Startup Growth",
+      "B2B SaaS"
+    ],
+    "role_hints": ["engineering manager", "product manager", "team lead"]
+  },
+  "sales": {
+    "label": "Sales / Business Development",
+    "passions": [
+      "B2B Sales",
+      "Enterprise Accounts",
+      "SaaS Sales",
+      "Import / Export",
+      "Retail Partnerships",
+      "CRM & Pipeline"
+    ],
+    "role_hints": ["account executive", "sales manager", "business development"]
+  },
+  "design": {
+    "label": "Design / Creative",
+    "passions": [
+      "Product Design",
+      "UX Research",
+      "Visual Design",
+      "Design Systems",
+      "Branding",
+      "Motion Design"
+    ],
+    "role_hints": ["product designer", "ux designer", "graphic designer"]
+  },
+  "operations": {
+    "label": "Operations / HR",
+    "passions": [
+      "People Operations",
+      "Supply Chain",
+      "Process Optimization",
+      "Customer Success",
+      "Logistics"
+    ],
+    "role_hints": ["operations manager", "hr specialist", "customer success"]
+  },
+  "finance": {
+    "label": "Finance / Accounting",
+    "passions": [
+      "Corporate Finance",
+      "FP&A",
+      "Audit",
+      "Banking",
+      "Risk Management"
+    ],
+    "role_hints": ["financial analyst", "accountant", "controller"]
+  },
+  "import_export": {
+    "label": "Import / Export / Trade",
+    "passions": [
+      "International Trade",
+      "Logistics",
+      "Customs & Compliance",
+      "B2B Distribution",
+      "Supply Chain"
+    ],
+    "role_hints": ["import export manager", "trade specialist", "export sales"]
+  }
+}

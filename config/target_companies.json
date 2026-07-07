@@ -1,0 +1,290 @@
+[
+  {
+    "name": "Airbnb",
+    "ats": "greenhouse",
+    "slug": "airbnb",
+    "region": "us",
+    "fields": [
+      "tech",
+      "design",
+      "management"
+    ]
+  },
+  {
+    "name": "Anthropic",
+    "ats": "greenhouse",
+    "slug": "anthropic",
+    "region": "us",
+    "fields": [
+      "tech"
+    ]
+  },
+  {
+    "name": "Cabify",
+    "ats": "greenhouse",
+    "slug": "cabify",
+    "region": "us",
+    "fields": [
+      "tech",
+      "sales",
+      "operations"
+    ]
+  },
+  {
+    "name": "Cloudflare",
+    "ats": "greenhouse",
+    "slug": "cloudflare",
+    "region": "us",
+    "fields": [
+      "tech"
+    ]
+  },
+  {
+    "name": "Coinbase",
+    "ats": "greenhouse",
+    "slug": "coinbase",
+    "region": "us",
+    "fields": [
+      "tech",
+      "finance"
+    ]
+  },
+  {
+    "name": "Contentsquare",
+    "ats": "lever",
+    "slug": "contentsquare",
+    "region": "us",
+    "fields": [
+      "tech",
+      "design"
+    ]
+  },
+  {
+    "name": "Databricks",
+    "ats": "greenhouse",
+    "slug": "databricks",
+    "region": "us",
+    "fields": [
+      "tech"
+    ]
+  },
+  {
+    "name": "Datadog",
+    "ats": "greenhouse",
+    "slug": "datadog",
+    "region": "us",
+    "fields": [
+      "tech"
+    ]
+  },
+  {
+    "name": "DeepMind",
+    "ats": "greenhouse",
+    "slug": "deepmind",
+    "region": "us",
+    "fields": [
+      "tech"
+    ]
+  },
+  {
+    "name": "Elastic",
+    "ats": "greenhouse",
+    "slug": "elastic",
+    "region": "us",
+    "fields": [
+      "tech"
+    ]
+  },
+  {
+    "name": "Fever",
+    "ats": "greenhouse",
+    "slug": "feverup",
+    "region": "us",
+    "fields": [
+      "tech",
+      "design",
+      "sales"
+    ]
+  },
+  {
+    "name": "ION Group",
+    "ats": "lever",
+    "slug": "ion",
+    "region": "us",
+    "fields": [
+      "tech",
+      "finance",
+      "management"
+    ]
+  },
+  {
+    "name": "Jobandtalent",
+    "ats": "lever",
+    "slug": "jobandtalent",
+    "region": "us",
+    "fields": [
+      "sales",
+      "operations",
+      "import_export"
+    ]
+  },
+  {
+    "name": "LinkedIn",
+    "ats": "greenhouse",
+    "slug": "linkedin",
+    "region": "us",
+    "fields": [
+      "tech",
+      "sales",
+      "management"
+    ]
+  },
+  {
+    "name": "Mistral AI",
+    "ats": "lever",
+    "slug": "mistral",
+    "region": "us",
+    "fields": [
+      "tech"
+    ]
+  },
+  {
+    "name": "Mitek Systems",
+    "ats": "lever",
+    "slug": "miteksystems-2",
+    "region": "us",
+    "fields": [
+      "tech"
+    ]
+  },
+  {
+    "name": "MongoDB",
+    "ats": "greenhouse",
+    "slug": "mongodb",
+    "region": "us",
+    "fields": [
+      "tech"
+    ]
+  },
+  {
+    "name": "Musixmatch",
+    "ats": "lever",
+    "slug": "musixmatch",
+    "region": "us",
+    "fields": [
+      "tech",
+      "design"
+    ]
+  },
+  {
+    "name": "N26",
+    "ats": "greenhouse",
+    "slug": "n26",
+    "region": "us",
+    "fields": [
+      "tech",
+      "finance",
+      "sales"
+    ]
+  },
+  {
+    "name": "Okta",
+    "ats": "greenhouse",
+    "slug": "okta",
+    "region": "us",
+    "fields": [
+      "tech"
+    ]
+  },
+  {
+    "name": "Palantir",
+    "ats": "lever",
+    "slug": "palantir",
+    "region": "us",
+    "fields": [
+      "tech",
+      "management"
+    ]
+  },
+  {
+    "name": "Prima",
+    "ats": "lever",
+    "slug": "prima",
+    "region": "eu",
+    "fields": [
+      "tech",
+      "finance",
+      "operations"
+    ]
+  },
+  {
+    "name": "Scale AI",
+    "ats": "greenhouse",
+    "slug": "scaleai",
+    "region": "us",
+    "fields": [
+      "tech"
+    ]
+  },
+  {
+    "name": "Spotify",
+    "ats": "lever",
+    "slug": "spotify",
+    "region": "us",
+    "fields": [
+      "tech",
+      "design"
+    ]
+  },
+  {
+    "name": "Stripe",
+    "ats": "greenhouse",
+    "slug": "stripe",
+    "region": "us",
+    "fields": [
+      "tech",
+      "finance",
+      "management"
+    ]
+  },
+  {
+    "name": "Typeform",
+    "ats": "greenhouse",
+    "slug": "typeform",
+    "region": "us",
+    "fields": [
+      "tech",
+      "design",
+      "sales"
+    ]
+  },
+  {
+    "name": "Wallapop",
+    "ats": "greenhouse",
+    "slug": "wallapop",
+    "region": "us",
+    "fields": [
+      "tech",
+      "design",
+      "sales"
+    ]
+  },
+  {
+    "name": "Zimperium",
+    "ats": "lever",
+    "slug": "zimperium",
+    "region": "us",
+    "fields": [
+      "tech"
+    ]
+  },
+  {
+    "name": "Zscaler",
+    "ats": "greenhouse",
+    "slug": "zscaler",
+    "region": "us",
+    "fields": [
+      "tech"
+    ]
+  }
+]
