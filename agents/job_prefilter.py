@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from html import unescape
 from typing import Any
 
 from agents.location_matcher import LocationMatcher
@@ -22,11 +23,59 @@ LEVEL_KEYWORDS: dict[ExperienceLevel, tuple[str, ...]] = {
 
 REMOTE_HINTS = ("remote", "remoto", "da remoto", "work from home", "wfh", "anywhere")
 ONSITE_HINTS = ("on-site", "onsite", "in office", "in sede", "hybrid")
+LINKEDIN_CLOSED_PATTERNS = (
+    "non accetta piu candidature",
+    "non accetta ulteriori candidature",
+    "questa offerta di lavoro non accetta",
+    "offerta di lavoro non accetta",
+    "no longer accepting applications",
+    "no longer accept applications",
+    "not accepting applications",
+    "applications are no longer being accepted",
+    "this job is no longer accepting applications",
+    "job is no longer accepting applications",
+    "applications closed",
+)
 SALARY_TOLERANCE_EUR = 4000
+SALARY_KEYWORD_RE = re.compile(
+    r"\b(?:salary|compensation|stipendio|retribuzione|ral|pay range|gross annual)\b",
+    re.I,
+)
 
 
 def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower()).strip()
+
+
+def _normalize_closed_text(text: str) -> str:
+    normalized = _normalize(text)
+    for src, dst in (
+        ("più", "piu"),
+        ("à", "a"),
+        ("è", "e"),
+        ("é", "e"),
+        ("ò", "o"),
+        ("ù", "u"),
+    ):
+        normalized = normalized.replace(src, dst)
+    return normalized
+
+
+def _is_linkedin_job_url(url: str) -> bool:
+    return "linkedin.com" in (url or "").lower()
+
+
+def linkedin_applications_closed(text: str) -> bool:
+    normalized = _normalize_closed_text(text)
+    return any(pattern in normalized for pattern in LINKEDIN_CLOSED_PATTERNS)
+
+
+def job_posting_closed(job: JobPosting) -> bool:
+    if job.raw_metadata.get("applications_closed"):
+        return True
+    if not _is_linkedin_job_url(job.url):
+        return False
+    return linkedin_applications_closed(f"{job.title} {job.description}")
 
 
 def _work_mode_matches(job: JobPosting, profile: UserProfile) -> bool:
@@ -99,20 +148,115 @@ def _extract_salary_range(text: str) -> tuple[int, int] | None:
     if range_match:
         low = _parse_amount(range_match.group(1))
         high = _parse_amount(range_match.group(2))
-        if low and high:
+        if low and high and _is_plausible_annual_salary(low, high, text=normalized):
             return min(low, high), max(low, high)
 
+    usd_match = re.search(
+        r"(?:USD|\$)\s*(\d{1,3}[kK]|\d{2,3}(?:[.,]\d{3})?)",
+        normalized,
+        flags=re.I,
+    )
+    if usd_match:
+        parsed = _parse_amount(usd_match.group(1))
+        if parsed:
+            return parsed, parsed
+
+    up_to_match = re.search(
+        r"(?:up to|fino a|jusqu'à)\s*(?:USD|\$|€|EUR)?\s*(\d{1,3}[kK]|\d{2,3}(?:[.,]\d{3})?)",
+        normalized,
+        flags=re.I,
+    )
+    if up_to_match:
+        parsed = _parse_amount(up_to_match.group(1))
+        if parsed:
+            return parsed, parsed
+
     amounts: list[int] = []
-    for token in re.findall(r"\d{1,3}[kK]|\d{2,3}[.,]?\d{3}", normalized):
+    for token in re.findall(r"\d{1,3}[kK]|\d{2,3}[.,]\d{3}", normalized):
         parsed = _parse_amount(token)
-        if parsed and parsed >= 15000:
+        if parsed and 10_000 <= parsed <= 350_000:
             amounts.append(parsed)
 
     if not amounts:
         return None
     if len(amounts) == 1:
         return amounts[0], amounts[0]
-    return min(amounts), max(amounts)
+    low, high = min(amounts), max(amounts)
+    if _is_plausible_annual_salary(low, high, text=normalized):
+        return low, high
+    return None
+
+
+def _is_plausible_annual_salary(low: int, high: int, *, text: str = "", is_usd: bool = False) -> bool:
+    max_allowed = 600_000 if is_usd else 350_000
+    if low < 10_000 or high < 10_000:
+        return False
+    if low > max_allowed or high > max_allowed:
+        return False
+    if high > low * 4:
+        return False
+    return True
+
+
+def extract_posting_salary_hint(text: str) -> str | None:
+    cleaned = re.sub(r"<[^>]+>", " ", text or "")
+    cleaned = re.sub(r"\s+", " ", unescape(cleaned)).strip()
+    if not cleaned:
+        return None
+
+    patterns = (
+        r"(?:RAL|salary|stipendio|retribuzione|compensation)[^\.]{0,180}?(\d{1,3}[.,]?\d{3}|\d{2,3}[kK])\s*(?:-|to|–|—)\s*(\d{1,3}[.,]?\d{3}|\d{2,3}[kK])",
+        r"(\d{1,3}[.,]?\d{3}|\d{2,3}[kK])\s*(?:-|to|–|—)\s*(\d{1,3}[.,]?\d{3}|\d{2,3}[kK])[^\.]{0,60}(?:EUR|€|RAL|annual|annuo|lordo)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, cleaned, flags=re.I)
+        if not match:
+            continue
+        low = _parse_amount(match.group(1))
+        high = _parse_amount(match.group(2))
+        is_usd = bool(re.search(r"(?:USD|\$)", match.group(0), flags=re.I))
+        if low and high and _is_plausible_annual_salary(low, high, is_usd=is_usd):
+            if is_usd:
+                return f"{max(low, high):,}".replace(",", ".") + " USD"
+            return format_salary_range_eur(min(low, high), max(low, high))
+
+    for chunk in re.split(r"(?<=[\.;])\s+", cleaned):
+        if not SALARY_KEYWORD_RE.search(chunk):
+            continue
+        parsed = _extract_salary_range(chunk)
+        if not parsed:
+            continue
+        is_usd = bool(re.search(r"(?:USD|\$)", chunk, flags=re.I))
+        if _is_plausible_annual_salary(parsed[0], parsed[1], is_usd=is_usd):
+            if is_usd:
+                return f"{parsed[1]:,}".replace(",", ".") + " USD"
+            return format_salary_range_eur(parsed[0], parsed[1])
+    return None
+
+
+def format_salary_range_eur(low: int, high: int) -> str:
+    def fmt(value: int) -> str:
+        return f"{value:,}".replace(",", ".")
+
+    if low == high:
+        return f"{fmt(low)} EUR"
+    return f"{fmt(low)}-{fmt(high)} EUR"
+
+
+def job_posting_salary_display(job: JobPosting) -> str | None:
+    if job.salary_hint and job.salary_hint.strip():
+        return job.salary_hint.strip()
+    hint = extract_posting_salary_hint(job.description[:8000])
+    if hint:
+        return hint
+    parsed = _job_salary_range(job)
+    if not parsed:
+        return None
+    text = f"{job.description[:4000]} {job.salary_hint or ''}"
+    if re.search(r"(?:USD|\$)", text, flags=re.I):
+        amount = parsed[1]
+        return f"{amount:,}".replace(",", ".") + " USD"
+    return format_salary_range_eur(parsed[0], parsed[1])
 
 
 def _job_salary_range(job: JobPosting) -> tuple[int, int] | None:
@@ -120,7 +264,12 @@ def _job_salary_range(job: JobPosting) -> tuple[int, int] | None:
         parsed = _extract_salary_range(job.salary_hint)
         if parsed:
             return parsed
-    return _extract_salary_range(job.description[:3000])
+    hint = extract_posting_salary_hint(job.description[:8000])
+    if hint:
+        parsed = _extract_salary_range(hint)
+        if parsed:
+            return parsed
+    return None
 
 
 def _salary_matches(job: JobPosting, profile: UserProfile) -> bool:
@@ -160,8 +309,15 @@ async def filter_jobs_for_ai(
 
     loc_matcher = location_matcher or LocationMatcher()
     rol_matcher = role_matcher or RoleMatcher()
-    candidates = jobs
     skipped = 0
+    candidates: list[JobPosting] = []
+    for job in jobs:
+        if job_posting_closed(job):
+            skipped += 1
+            continue
+        candidates.append(job)
+    if not candidates:
+        return [], skipped
 
     if profile.fundamental_criteria.location and profile.location_places():
         if on_progress:

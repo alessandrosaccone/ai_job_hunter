@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import httpx
 
 from agents.job_prefilter import _extract_salary_range
+from agents.job_title_enricher import JobTitleEnricher, looks_like_bulk_listing_title
 from models.job import JobPosting
 from models.user_profile import UserProfile
 
@@ -34,7 +35,7 @@ INDEED_JOB_RE = re.compile(
     re.I,
 )
 BULK_TITLE_RE = re.compile(
-    r"\b(\d{2,})\s+(?:jobs?|offerte?|positions?|annunci|lavori|openings?)\b",
+    r"\b(\d{2,})\s+(?:jobs?|offerte?|positions?|annunci|lavori|openings?|empleos?)\b",
     re.I,
 )
 SCRAPERAPI_URL = "https://api.scraperapi.com"
@@ -87,14 +88,11 @@ def is_aggregate_job_listing_url(url: str) -> bool:
     return False
 
 
-def looks_like_bulk_listing_title(title: str) -> bool:
-    return bool(BULK_TITLE_RE.search(title))
-
-
 class JobListingExpander:
     def __init__(self, search_router: Any | None = None) -> None:
         self.search_router = search_router
         self._scraperapi_key = os.getenv("SCRAPERAPI_API_KEY", "")
+        self._title_enricher = JobTitleEnricher(scraperapi_key=self._scraperapi_key)
 
     async def expand(
         self,
@@ -135,6 +133,8 @@ class JobListingExpander:
                     raw_metadata={"expanded_from": job.url, **job.raw_metadata},
                 ),
             )
+
+        expanded = await self._title_enricher.enrich_many(client, expanded)
 
         logger.info(
             "[JobListingExpander] Expanded %s into %s individual jobs.",

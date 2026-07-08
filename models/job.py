@@ -47,6 +47,7 @@ class MatchResult(BaseModel):
     salary_research_summary: str | None = None
     application_channel: ApplicationChannel = "unknown"
     cv_strategy: str | None = None
+    matched_with_full_description: bool = False
 
 
 class ScanResult(BaseModel):

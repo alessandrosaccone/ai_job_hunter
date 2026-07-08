@@ -12,10 +12,11 @@ Runs **locally** via a [Streamlit](https://streamlit.io/) web interface.
    - **Target Hunter**: queries ATS APIs (Lever, Greenhouse) for companies in `config/target_companies.json` plus **dynamically discovered** boards (see below).
    - **Startup Discoverer**: searches Google Jobs and the web via a **provider fallback chain** (see below).
 4. **Dynamic ATS discovery** — From Startup Discoverer results, new Lever/Greenhouse companies not already in the target list are **probed via API**. If accessible, they are saved to `discovered_companies.json` (per profile) and Target Hunter re-fetches **full job descriptions** from those boards. On duplicate URLs, the richer API version wins over Google snippets.
-5. **Pre-filter** — Optional fundamental criteria act as hard gates (location, role, salary with €4,000 tolerance, work mode, experience level). Lightweight AI matchers handle location/role when enabled. Listings **without a stated salary still pass** the salary pre-filter; RAL is researched later during AI matching.
-6. **AI matching** — DeepSeek evaluates each remaining listing and assigns a score from 0 to 10. When salary is missing, **Salary Researcher** gathers web snippets through the provider chain (DeepSeek web excluded) and extracts/synthesizes RAL from real sources only.
-7. **CV guidance** — For each match, the AI suggests the likely application channel (human recruiter, ATS, or mixed) and which CV style to send.
-8. **Results** — Listings with a score ≥ the configured threshold are promoted on the **Dashboard**, logged in **Log match**, and can be bookmarked in **Salvati**.
+5. **Title enrichment (new)** — Before AI scoring, generic/aggregate titles (for example `+1000 empleos...`) are enriched by opening the single job page and extracting title/company from structured metadata (`og:title`, JSON-LD `JobPosting`, page title, and URL slug fallback).
+6. **Pre-filter** — Optional fundamental criteria act as hard gates (location, role, salary with €4,000 tolerance, work mode, experience level). Lightweight AI matchers handle location/role when enabled. Listings **without a stated salary still pass** the salary pre-filter; RAL is researched later during AI matching.
+7. **AI matching** — DeepSeek evaluates each remaining listing and assigns a score from 0 to 10. When salary is missing, **Salary Researcher** gathers web snippets through the provider chain (DeepSeek web excluded) and extracts/synthesizes RAL from real sources only.
+8. **CV guidance** — For each match, the AI suggests the likely application channel (human recruiter, ATS, or mixed) and which CV style to send.
+9. **Results** — Listings with a score ≥ the configured threshold are promoted on the **Dashboard**, logged in **Log match**, and can be bookmarked in **Salvati**.
 
 ## Search providers & fallback
 
@@ -66,6 +67,7 @@ On the next scan, already-analyzed URLs are **skipped automatically**. Collectio
 - **Experience-level rules** — Filter by exact level, lower levels, or N steps above/below your level.
 - **Salary transparency** — Web research via the provider chain when RAL is missing; modest score penalty for lack of transparency.
 - **Manual RAL overrides** — On any match card (Dashboard, Log match, Salvati), open the **RAL** expander to enter or correct salary after reading the posting (e.g. when AI/web research missed it). Saved per job URL in `salary_overrides.json`; used for display and **sort by RAL** (manual values take priority).
+- **Title enrichment and cleanup** — Generic titles from listing pages are replaced with specific job titles extracted from single-job pages; applies to new scans and can be retrofitted to existing data.
 - **Expandable match cards** — Each job shows only **title + score** until you click; inside: company, **RAL**, **Che CV inviare?**, **Motivazione AI**, and actions.
 - **CV strategy hints** — Application channel detection (ATS / recruiter / mixed) with practical CV advice.
 - **Legacy migration** — Existing `config/user_profile.json` and `data/` files are migrated automatically to the default profile on first run.
@@ -166,6 +168,20 @@ Each job appears as a **single collapsible row** showing only **title and match 
 
 During a scan, the **activity log** also lists **SCARTATO AI** and **SOTTO SOGLIA** entries with a short rejection reason for jobs not promoted.
 
+### Maintenance — retrofit titles in existing data
+
+If you already have old scans with generic titles, run:
+
+```bash
+# Windows PowerShell
+$env:PYTHONPATH="d:\ai_proj"
+python .\scripts\repair_job_titles.py
+```
+
+The script updates both:
+- `data/profiles/<slug>/scan_results.json`
+- `data/profiles/<slug>/scan_history.json`
+
 ### Manual RAL on match cards
 
 When automatic detection or web research does not show the salary but you find it on the job page:
@@ -188,6 +204,7 @@ ai_proj/
 │   ├── ats_discovery.py        # Detect & verify Lever/Greenhouse from search URLs
 │   ├── ai_matcher.py           # Full AI evaluation + CV strategy
 │   ├── salary_researcher.py    # Web salary research (provider chain + DeepSeek)
+│   ├── job_title_enricher.py   # Enriches generic titles from job page metadata
 │   ├── job_search_fallback.py  # DuckDuckGo / DeepSeek web job search adapters
 │   ├── deepseek_web_search.py  # DeepSeek native web search tool
 │   ├── duckduckgo_search.py    # DuckDuckGo organic search wrapper
@@ -222,6 +239,8 @@ ai_proj/
 │           ├── salary_overrides.json
 │           └── saved_jobs.json
 ├── requirements.txt
+├── scripts/
+│   └── repair_job_titles.py    # Retrofits enriched titles in saved scan files
 ├── .env.example                # Environment variable template (no secrets)
 └── .gitignore
 ```
@@ -257,10 +276,11 @@ Funziona in **locale** tramite interfaccia web [Streamlit](https://streamlit.io/
    - **Target Hunter**: interroga le API ATS (Lever, Greenhouse) delle aziende in `config/target_companies.json` più le board **scoperte dinamicamente** (vedi sotto).
    - **Startup Discoverer**: cerca su Google Jobs e sul web tramite una **catena di provider** (vedi sotto).
 4. **Scoperta ATS dinamica** — Dai risultati dello Startup Discoverer, nuove aziende Lever/Greenhouse non già in lista target vengono **verificate via API**. Se accessibili, vengono salvate in `discovered_companies.json` (per profilo) e il Target Hunter recupera le **descrizioni complete** da quelle board. Su URL duplicati, vince la versione API più ricca rispetto agli snippet Google.
-5. **Pre-filtro** — I criteri fondamentali opzionali scartano a priori (località, ruolo, RAL con tolleranza di €4.000, modalità, livello). Matcher AI leggeri gestiscono località/ruolo se attivi. Gli annunci **senza RAL indicata passano** comunque il pre-filtro stipendio; la RAL viene cercata dopo durante il matching AI.
-6. **Matching AI** — DeepSeek valuta ogni annuncio rimasto e assegna un punteggio da 0 a 10. Se la RAL non è indicata, **Salary Researcher** raccoglie snippet web con la catena di provider (DeepSeek web escluso) e estrae/sintetizza la RAL solo da fonti reali.
-7. **Suggerimento CV** — Per ogni match, l'AI indica il canale di candidatura probabile (recruiter umano, ATS, misto) e quale tipo di CV inviare.
-8. **Risultati** — Gli annunci con score ≥ soglia configurata vengono promossi nella **Dashboard**, registrati nel **Log match** e possono essere salvati in **Salvati**.
+5. **Arricchimento titoli (nuovo)** — Prima del punteggio AI, i titoli generici/aggregati (es. `+1000 empleos...`) vengono arricchiti aprendo la singola offerta e ricavando titolo/azienda da metadati strutturati (`og:title`, JSON-LD `JobPosting`, titolo pagina, fallback da URL).
+6. **Pre-filtro** — I criteri fondamentali opzionali scartano a priori (località, ruolo, RAL con tolleranza di €4.000, modalità, livello). Matcher AI leggeri gestiscono località/ruolo se attivi. Gli annunci **senza RAL indicata passano** comunque il pre-filtro stipendio; la RAL viene cercata dopo durante il matching AI.
+7. **Matching AI** — DeepSeek valuta ogni annuncio rimasto e assegna un punteggio da 0 a 10. Se la RAL non è indicata, **Salary Researcher** raccoglie snippet web con la catena di provider (DeepSeek web escluso) e estrae/sintetizza la RAL solo da fonti reali.
+8. **Suggerimento CV** — Per ogni match, l'AI indica il canale di candidatura probabile (recruiter umano, ATS, misto) e quale tipo di CV inviare.
+9. **Risultati** — Gli annunci con score ≥ soglia configurata vengono promossi nella **Dashboard**, registrati nel **Log match** e possono essere salvati in **Salvati**.
 
 ## Provider di ricerca e fallback
 
@@ -311,6 +331,7 @@ Alla scansione successiva, gli URL già analizzati vengono **saltati automaticam
 - **Regole livello esperienza** — Filtra per livello esatto, livelli inferiori, o X gradini sopra/sotto il tuo.
 - **Trasparenza RAL** — Ricerca web tramite la catena di provider quando la RAL manca; penalità leggera sul punteggio.
 - **RAL annotata manualmente** — Su ogni card (Dashboard, Log match, Salvati), expander **RAL** per inserire o correggere lo stipendio dopo aver aperto l'annuncio. Salvata per URL in `salary_overrides.json`; usata in visualizzazione e **ordinamento per RAL** (priorità sulla stima automatica).
+- **Arricchimento e pulizia titoli** — I titoli generici delle pagine aggregate vengono sostituiti con titoli specifici delle singole offerte; vale per nuove scansioni e può essere applicato anche ai dati già salvati.
 - **Card annuncio espandibili** — Ogni lavoro mostra solo **titolo + punteggio** finché non clicchi; dentro: azienda, **RAL**, **Che CV inviare?**, **Motivazione AI** e azioni.
 - **Suggerimenti CV** — Rilevamento canale candidatura (ATS / recruiter / misto) con consigli pratici.
 - **Migrazione legacy** — Un eventuale `config/user_profile.json` e i file in `data/` vengono migrati automaticamente al profilo predefinito al primo avvio.
@@ -411,6 +432,20 @@ Ogni lavoro compare come **riga collassata** con solo **titolo e punteggio** (es
 
 Durante la scansione, il **log attività** elenca anche **SCARTATO AI** e **SOTTO SOGLIA** con una breve motivazione per gli annunci non promossi.
 
+### Manutenzione — aggiorna i titoli nei dati già salvati
+
+Se hai già scansioni con titoli generici, esegui:
+
+```bash
+# Windows PowerShell
+$env:PYTHONPATH="d:\ai_proj"
+python .\scripts\repair_job_titles.py
+```
+
+Lo script aggiorna entrambi:
+- `data/profiles/<slug>/scan_results.json`
+- `data/profiles/<slug>/scan_history.json`
+
 ### RAL manuale sulle card
 
 Se l'AI o la ricerca web non hanno trovato la RAL ma la vedi aprendo l'annuncio:
@@ -433,6 +468,7 @@ ai_proj/
 │   ├── ats_discovery.py        # Rileva e verifica Lever/Greenhouse da URL di ricerca
 │   ├── ai_matcher.py           # Valutazione AI completa + strategia CV
 │   ├── salary_researcher.py    # Ricerca RAL web (catena provider + DeepSeek)
+│   ├── job_title_enricher.py   # Arricchisce titoli generici da metadati pagina annuncio
 │   ├── job_search_fallback.py  # Adapter ricerca annunci DuckDuckGo / DeepSeek web
 │   ├── deepseek_web_search.py  # Tool ricerca web nativo DeepSeek
 │   ├── duckduckgo_search.py    # Wrapper ricerca organica DuckDuckGo
@@ -467,6 +503,8 @@ ai_proj/
 │           ├── salary_overrides.json
 │           └── saved_jobs.json
 ├── requirements.txt
+├── scripts/
+│   └── repair_job_titles.py    # Aggiorna i titoli nei file di scansione già salvati
 ├── .env.example                # Template variabili d'ambiente (senza valori)
 └── .gitignore
 ```

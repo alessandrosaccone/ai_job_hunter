@@ -7,11 +7,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from dotenv import load_dotenv
 
 from agents.ai_matcher import AIMatcher
 from agents.ats_discovery import discover_and_verify_companies
 from agents.job_prefilter import filter_jobs_for_ai
+from agents.job_title_enricher import JobTitleEnricher, needs_title_enrichment, title_from_reasoning
 from agents.location_matcher import LocationMatcher
 from agents.role_matcher import RoleMatcher
 from agents.salary_researcher import SalaryResearcher
@@ -191,6 +194,15 @@ class JobHunterOrchestrator:
 
         merged_jobs = self._deduplicate_jobs(target_jobs + dynamic_jobs + startup_jobs)
         new_jobs = self.memory.get_new_jobs(merged_jobs)
+        if new_jobs:
+            self._emit(
+                on_progress,
+                "status",
+                {"message": f"Arricchimento titoli annunci ({len(new_jobs)} nuovi)..."},
+            )
+            title_enricher = JobTitleEnricher()
+            async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+                new_jobs = await title_enricher.enrich_many(client, new_jobs)
         eligible_jobs, prefilter_skipped = await filter_jobs_for_ai(
             new_jobs,
             profile,
@@ -320,6 +332,65 @@ class JobHunterOrchestrator:
             if existing is None or self._job_richness(job) > self._job_richness(existing):
                 unique[job.dedup_key] = job
         return list(unique.values())
+
+    async def run_accurate_match(
+        self,
+        job: JobPosting,
+        profile: UserProfile,
+    ) -> tuple[MatchResult, str]:
+        """Fetch full job description from the posting page, then re-run AI matching."""
+        previous_len = len((job.description or "").strip())
+        enricher = JobTitleEnricher()
+        async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+            enriched_job, description_enriched, page_fetched = (
+                await enricher.enrich_for_accurate_match(client, job)
+            )
+
+        result = await self.ai_matcher.match(enriched_job, profile)
+        if description_enriched:
+            result = result.model_copy(update={"matched_with_full_description": True})
+
+        new_len = len((enriched_job.description or "").strip())
+        score_text = f"{result.match_score:.1f}/10"
+        if not page_fetched:
+            status = (
+                f"Impossibile leggere la pagina dell'annuncio; "
+                f"match su estratto disponibile: {score_text}."
+            )
+        elif description_enriched:
+            status = (
+                f"Descrizione arricchita ({previous_len} → {new_len} caratteri), "
+                f"match ricalcolato: {score_text}."
+            )
+        elif new_len > previous_len:
+            status = (
+                f"Descrizione leggermente ampliata ({previous_len} → {new_len} caratteri), "
+                f"match ricalcolato: {score_text}."
+            )
+        else:
+            status = (
+                f"Descrizione già completa ({new_len} caratteri), "
+                f"match ricalcolato: {score_text}."
+            )
+
+        return result, status
+
+
+def run_accurate_match_sync(
+    job: JobPosting,
+    profile: UserProfile,
+    *,
+    memory_path: Path | str | None = None,
+    scan_results_path: Path | str | None = None,
+    discovered_companies_path: Path | str | None = None,
+) -> tuple[MatchResult, str]:
+    memory = JobMemory(memory_path) if memory_path else JobMemory()
+    orchestrator = JobHunterOrchestrator(
+        memory=memory,
+        scan_results_path=scan_results_path or DEFAULT_SCAN_RESULTS_PATH,
+        discovered_companies_path=discovered_companies_path,
+    )
+    return asyncio.run(orchestrator.run_accurate_match(job, profile))
 
 
 def run_scan_sync(

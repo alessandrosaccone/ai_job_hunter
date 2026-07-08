@@ -75,5 +75,20 @@ class SavedJobsStore:
         self.save()
         return True
 
+    def update_match(self, result: MatchResult) -> bool:
+        key = result.job.dedup_key.lower()
+        updated = False
+        for index, app in enumerate(self.applications):
+            if app.match.job.dedup_key.lower() == key:
+                self.applications[index] = SavedApplication(
+                    match=result,
+                    saved_at=app.saved_at,
+                )
+                updated = True
+                break
+        if updated:
+            self.save()
+        return updated
+
     def list_sorted(self) -> list[SavedApplication]:
         return sorted(self.applications, key=lambda app: app.saved_at, reverse=True)

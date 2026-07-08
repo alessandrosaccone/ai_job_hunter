@@ -22,6 +22,14 @@ SALARY_QUERY_TEMPLATES = (
     "{title} {company} salary site:levels.fyi",
     "stipendio medio {title} {location} EUR",
 )
+LEVEL_TERMS: dict[str, tuple[str, ...]] = {
+    "internship": ("intern", "internship", "stage", "trainee"),
+    "graduate": ("graduate", "new grad", "entry", "junior"),
+    "entry": ("entry", "junior", "associate"),
+    "mid": ("mid", "intermediate", "ii"),
+    "senior": ("senior", "sr", "staff", "principal"),
+    "manager": ("manager", "lead", "head", "director", "vp"),
+}
 
 SALARY_SYNTHESIS_SYSTEM = """Sei un analista compensazioni. Ti vengono forniti estratti da ricerca web reale (Glassdoor, Levels.fyi, Indeed, ecc.).
 
@@ -124,7 +132,11 @@ class SalaryResearcher:
             self._cache[cache_key] = result
             return result
 
-        extracted_salary, extracted_sources = _extract_salary_from_snippets(snippets)
+        extracted_salary, extracted_sources = _extract_salary_from_snippets(
+            snippets,
+            job=job,
+            profile=profile,
+        )
         all_sources = list(dict.fromkeys([*extracted_sources, *source_urls]))[:5]
 
         if extracted_salary:
@@ -292,12 +304,15 @@ class SalaryResearcher:
         user_prompt = (
             f"Analizza SOLO gli estratti web per:\n"
             f"- Ruolo: {job.title}\n"
+            f"- Ruoli target utente: {', '.join(profile.target_roles)}\n"
             f"- Azienda: {job.company}\n"
             f"- Località: {location}\n"
             f"- Livello: {profile.experience_level}\n\n"
             f"Provider ricerca: {provider or 'n/d'}\n"
             f"Estratti:\n{evidence_block}\n\n"
-            "Se non trovi cifre esplicite negli estratti, estimated_salary_eur deve essere null."
+            "Considera solo cifre coerenti con ruolo/livello richiesti; ignora seniority troppo diverse "
+            "(es. architect/staff se il ruolo è junior/entry). "
+            "Se non trovi cifre esplicite e coerenti negli estratti, estimated_salary_eur deve essere null."
         )
 
         completion = await self.client.chat.completions.create(
@@ -329,26 +344,69 @@ class SalaryResearcher:
 
 def _extract_salary_from_snippets(
     snippets: list[dict[str, str]],
+    *,
+    job: JobPosting,
+    profile: UserProfile,
 ) -> tuple[str | None, list[str]]:
-    ranges: list[tuple[int, int]] = []
+    scored_ranges: list[tuple[int, tuple[int, int], str]] = []
     sources: list[str] = []
+    job_tokens = _tokenize(f"{job.title} {' '.join(profile.target_roles)}")
+    level_terms = set(LEVEL_TERMS.get(profile.experience_level, ()))
 
     for item in snippets:
-        text = f"{item.get('title', '')} {item.get('snippet', '')}"
+        title = str(item.get("title", ""))
+        snippet = str(item.get("snippet", ""))
+        text = f"{title} {snippet}"
         parsed = _extract_salary_range(text)
         if not parsed:
             continue
-        ranges.append(parsed)
+        context_tokens = _tokenize(text)
+        overlap = len(job_tokens.intersection(context_tokens))
+        level_boost = 1 if (level_terms and any(term in text.lower() for term in level_terms)) else 0
+        source_boost = 1 if any(site in (item.get("link", "") or "") for site in ("glassdoor", "levels.fyi", "indeed")) else 0
+        score = overlap + level_boost + source_boost
+        link = str(item.get("link", ""))
+        scored_ranges.append((score, parsed, link))
         link = item.get("link")
         if link:
             sources.append(str(link))
 
-    if not ranges:
+    if not scored_ranges:
         return None, []
 
-    low = min(item[0] for item in ranges)
-    high = max(item[1] for item in ranges)
-    return _format_salary_range(low, high), sources
+    scored_ranges.sort(key=lambda item: item[0], reverse=True)
+    top_score = scored_ranges[0][0]
+    if top_score > 0:
+        selected = [item for item in scored_ranges if item[0] >= max(1, top_score - 1)]
+    else:
+        selected = scored_ranges[:4]
+
+    ranges = [item[1] for item in selected]
+    lows = sorted(item[0] for item in ranges)
+    highs = sorted(item[1] for item in ranges)
+
+    # Remove outliers when enough evidence exists.
+    if len(lows) >= 4:
+        lows = lows[1:-1]
+    if len(highs) >= 4:
+        highs = highs[1:-1]
+
+    low = min(lows)
+    high = max(highs)
+    if high > low * 3 and len(highs) > 1:
+        high = highs[len(highs) // 2]
+
+    selected_sources = [item[2] for item in selected if item[2]]
+    deduped_sources = list(dict.fromkeys(selected_sources + sources))
+    return _format_salary_range(low, high), deduped_sources
+
+
+def _tokenize(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-zA-Z]{3,}", (text or "").lower())
+        if token not in {"salary", "stipendio", "eur", "euro", "jobs", "job"}
+    }
 
 
 def _format_salary_range(low: int, high: int) -> str:

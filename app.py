@@ -11,7 +11,8 @@ from dotenv import load_dotenv
 
 from models.job import MatchResult, ScanResult
 from models.user_profile import ExperienceLevelRule, FundamentalCriteria, UserProfile, read_search_mode
-from orchestrator import run_scan_sync
+from orchestrator import run_accurate_match_sync, run_scan_sync
+from agents.job_title_enricher import needs_accurate_match
 from storage.memory import JobMemory
 from storage.profile_registry import (
     ProfilePaths,
@@ -22,6 +23,7 @@ from storage.profile_registry import (
     set_last_active,
 )
 from agents.job_listing_expander import match_salary_sort_key
+from agents.job_prefilter import job_posting_salary_display
 from agents.search_providers.router import JobSearchRouter
 from storage.search_quota import clear_provider_exhausted, exhausted_providers
 from storage.saved_jobs import SavedJobsStore
@@ -123,14 +125,17 @@ def _inject_styles() -> None:
             padding: 1rem 1.2rem;
             pointer-events: none;
         }
-        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) .job-match-header-inner {
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) .job-match-title-row {
             display: flex;
             justify-content: space-between;
-            align-items: center;
-            gap: 1.25rem;
+            align-items: flex-start;
+            gap: 1.5rem;
+            margin-bottom: 0.55rem;
         }
         div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) .job-match-title {
-            margin: 0 0 0.25rem 0;
+            margin: 0;
+            flex: 1;
+            min-width: 0;
             font-size: 1.55rem;
             font-weight: 700;
             line-height: 1.25;
@@ -147,36 +152,11 @@ def _inject_styles() -> None:
             font-size: 0.95rem;
             padding: 0.35rem 0.75rem;
             flex-shrink: 0;
+            margin-top: 0.2rem;
+            white-space: nowrap;
         }
         div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) [data-testid="stElementContainer"]:has(.job-match-header) + [data-testid="stElementContainer"] {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            z-index: 2;
-            margin: 0 !important;
-            padding: 0 !important;
-            min-height: 5.5rem;
-            height: 6.5rem;
-        }
-        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) [data-testid="stElementContainer"]:has(.job-match-header) + [data-testid="stElementContainer"] [data-testid="stButton"] {
-            width: 100%;
-            height: 100%;
-        }
-        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) [data-testid="stElementContainer"]:has(.job-match-header) + [data-testid="stElementContainer"] [data-testid="stButton"] > button {
-            width: 100% !important;
-            min-height: 6.5rem !important;
-            height: 100% !important;
-            opacity: 0 !important;
-            border: none !important;
-            background: transparent !important;
-            box-shadow: none !important;
-            cursor: pointer !important;
-            padding: 0 !important;
-            margin: 0 !important;
-        }
-        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) [data-testid="stElementContainer"]:has(.job-match-header) + [data-testid="stElementContainer"] [data-testid="stButton"] > button:hover {
-            background: rgba(249, 250, 251, 0.55) !important;
+            padding: 0 1.2rem 0.8rem 1.2rem !important;
         }
         div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) .job-match-details-marker {
             display: none;
@@ -391,10 +371,7 @@ def _match_score_threshold() -> float:
 
 
 def _truncate_log_text(text: str, limit: int = 180) -> str:
-    cleaned = " ".join(text.split())
-    if len(cleaned) <= limit:
-        return cleaned
-    return f"{cleaned[: limit - 1]}…"
+    return " ".join(text.split())
 
 
 def _format_ai_rejection_log(result: MatchResult, *, promoted: bool) -> str | None:
@@ -641,6 +618,78 @@ def render_profile_tab(paths: ProfilePaths) -> None:
         st.success(f"Profilo «{paths.display_name}» salvato.")
 
 
+def _persist_updated_match(paths: ProfilePaths, updated: MatchResult) -> None:
+    key = updated.job.dedup_key.lower()
+    threshold = _match_score_threshold()
+
+    scan_data = st.session_state.get("last_scan_result")
+    if scan_data:
+        scan_result = ScanResult.model_validate(scan_data)
+    else:
+        scan_result = ScanResult.load(paths.scan_results_path)
+
+    if scan_result:
+        matches: list[MatchResult] = []
+        replaced = False
+        for item in scan_result.matches:
+            if item.job.dedup_key.lower() == key:
+                matches.append(updated)
+                replaced = True
+            else:
+                matches.append(item)
+        if not replaced and updated.approved and updated.match_score >= threshold:
+            matches.append(updated)
+        matches.sort(key=lambda match: match.match_score, reverse=True)
+        scan_result = scan_result.model_copy(
+            update={
+                "matches": matches,
+                "total_promoted": sum(
+                    1
+                    for match in matches
+                    if match.approved and match.match_score >= threshold
+                ),
+            },
+        )
+        scan_result.save(paths.scan_results_path)
+        st.session_state["last_scan_result"] = scan_result.model_dump(mode="json")
+
+    live_data = st.session_state.get("live_matches")
+    if live_data:
+        live_matches: list[dict] = []
+        replaced = False
+        for item in live_data:
+            current = MatchResult.model_validate(item)
+            if current.job.dedup_key.lower() == key:
+                live_matches.append(updated.model_dump(mode="json"))
+                replaced = True
+            else:
+                live_matches.append(item)
+        if not replaced and updated.approved and updated.match_score >= threshold:
+            live_matches.append(updated.model_dump(mode="json"))
+        st.session_state["live_matches"] = live_matches
+
+    saved_store = _saved_store(paths)
+    saved_store.update_match(updated)
+
+
+def _run_accurate_match_action(
+    result: MatchResult,
+    profile: UserProfile,
+    paths: ProfilePaths,
+) -> None:
+    with st.spinner("Lettura annuncio completo e ricalcolo match..."):
+        updated, status = run_accurate_match_sync(
+            result.job,
+            profile,
+            memory_path=paths.memory_path,
+            scan_results_path=paths.scan_results_path,
+            discovered_companies_path=paths.discovered_companies_path,
+        )
+    _persist_updated_match(paths, updated)
+    st.toast(status)
+    st.rerun()
+
+
 def _card_key(result: MatchResult, prefix: str, suffix: str = "") -> str:
     base = hashlib.md5(result.job.dedup_key.encode()).hexdigest()
     parts = [prefix, base]
@@ -652,10 +701,13 @@ def _card_key(result: MatchResult, prefix: str, suffix: str = "") -> str:
 def _ral_summary(result: MatchResult, manual_salary: str | None) -> tuple[str, str]:
     if manual_salary:
         return manual_salary, "tua"
-    if result.salary_indicated and result.job.salary_hint:
-        return result.job.salary_hint, "annuncio"
+    posting_salary = job_posting_salary_display(result.job)
+    if result.salary_indicated and posting_salary:
+        return posting_salary, "annuncio"
     if result.estimated_salary_eur:
         return result.estimated_salary_eur, "stima"
+    if posting_salary:
+        return posting_salary, "annuncio"
     return "non indicata", "mancante"
 
 
@@ -677,8 +729,9 @@ def _render_salary_details(
     if manual_salary:
         st.markdown(f"**RAL annotata da te:** {manual_salary}")
         st.caption("Hai inserito questo valore manualmente dopo aver aperto l'annuncio.")
-    elif result.salary_indicated and result.job.salary_hint:
-        st.markdown(f"**RAL nell'annuncio:** {result.job.salary_hint}")
+    elif result.salary_indicated or job_posting_salary_display(result.job):
+        posting_salary = job_posting_salary_display(result.job)
+        st.markdown(f"**RAL nell'annuncio:** {posting_salary}")
     elif result.estimated_salary_eur:
         st.markdown(f"**Stima da ricerca web:** {result.estimated_salary_eur}")
         st.caption("Stima automatica da fonti esterne (Glassdoor, Levels.fyi, ecc.), non dall'annuncio.")
@@ -736,41 +789,64 @@ def _job_open_key(card_key: str) -> str:
     return f"job-open-{card_key}"
 
 
+def _clear_job_card_state() -> None:
+    for state_key in list(st.session_state.keys()):
+        if state_key.startswith("job-open-"):
+            st.session_state.pop(state_key, None)
+
+
 def _toggle_job_card(card_key: str) -> None:
     state_key = _job_open_key(card_key)
     st.session_state[state_key] = not st.session_state.get(state_key, False)
 
 
-def _render_match_card_header(result: MatchResult, css_id: str, card_key: str) -> None:
+def _display_job_title(result: MatchResult) -> str:
+    title = (result.job.title or "").strip()
+    if title and not title.startswith("+") and "empleos de" not in title.lower():
+        return title
+    if title:
+        return title
+    return "Offerta di lavoro"
+
+
+def _render_match_card_header(
+    result: MatchResult,
+    css_id: str,
+    card_key: str,
+    *,
+    allow_toggle: bool,
+) -> None:
     color = _score_color(result.match_score)
-    company_line = html.escape(f"{result.job.company} · {result.job.location}")
-    title = html.escape(result.job.title)
+    company_bits = [result.job.company]
+    if result.job.location:
+        company_bits.append(result.job.location)
+    company_line = html.escape(" · ".join(bit for bit in company_bits if bit))
+    title = html.escape(_display_job_title(result))
     score_text = f"{result.match_score:.1f}/10"
     st.markdown(
         f"""
         <div id="{css_id}" class="job-match-card-block"></div>
         <div class="job-match-header">
-            <div class="job-match-header-inner">
-                <div class="job-match-header-text">
-                    <h3 class="job-match-title">{title}</h3>
-                    <p class="job-match-company">{company_line}</p>
-                </div>
+            <div class="job-match-title-row">
+                <h3 class="job-match-title">{title}</h3>
                 <span class="score-badge job-match-score" style="background:{color};">
                     Score {score_text}
                 </span>
             </div>
+            <p class="job-match-company">{company_line}</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    st.button(
-        "Mostra dettagli",
-        key=f"job-toggle-{card_key}",
-        on_click=_toggle_job_card,
-        args=(card_key,),
-        use_container_width=True,
-        type="tertiary",
-    )
+    if allow_toggle:
+        st.button(
+            "Nascondi dettagli" if st.session_state.get(_job_open_key(card_key), False) else "Mostra dettagli",
+            key=f"job-toggle-{card_key}",
+            on_click=_toggle_job_card,
+            args=(card_key,),
+            use_container_width=True,
+            type="secondary",
+        )
 
 
 def _render_match_card_details(
@@ -781,7 +857,29 @@ def _render_match_card_details(
     allow_save: bool,
     key: str,
     manual_salary: str | None,
+    profile: UserProfile | None = None,
+    paths: ProfilePaths | None = None,
 ) -> None:
+    desc_len = len((result.job.description or "").strip())
+    if result.matched_with_full_description:
+        st.caption("Match accurato — valutazione basata sulla descrizione completa dell'annuncio.")
+    elif needs_accurate_match(result.job):
+        st.caption(
+            f"Solo estratto breve ({desc_len} caratteri). "
+            "Usa **Match accurato** per leggere l'annuncio completo e ricalcolare il punteggio."
+        )
+
+    if result.job.description:
+        preview = result.job.description[:1200]
+        if len(result.job.description) > 1200:
+            preview += "…"
+        with st.expander(
+            f"Descrizione annuncio ({desc_len} caratteri)",
+            expanded=False,
+            key=f"desc-{key}",
+        ):
+            st.write(preview)
+
     with st.expander(
         _ral_expander_label(result, manual_salary),
         expanded=False,
@@ -809,6 +907,15 @@ def _render_match_card_details(
     with st.expander("Motivazione AI", expanded=False, key=f"reason-{key}"):
         st.write(result.reasoning)
 
+    if profile is not None and paths is not None and not result.matched_with_full_description:
+        if st.button(
+            "Match accurato",
+            use_container_width=True,
+            key=f"accurate-{key}",
+            help="Apre la pagina dell'annuncio, legge la descrizione completa e ricalcola il match AI.",
+        ):
+            _run_accurate_match_action(result, profile, paths)
+
     action_col1, action_col2 = st.columns([1, 1])
     with action_col1:
         st.link_button(
@@ -831,14 +938,26 @@ def _render_match_card(
     allow_save: bool = True,
     key_prefix: str = "card",
     key_suffix: str = "",
+    allow_toggle: bool = True,
+    default_open: bool = False,
+    profile: UserProfile | None = None,
+    paths: ProfilePaths | None = None,
 ) -> None:
     key = _card_key(result, key_prefix, key_suffix)
     manual_salary = salary_store.get(result.job.dedup_key) if salary_store else None
     css_id = f"jmc-{hashlib.md5(key.encode()).hexdigest()[:12]}"
-    is_open = st.session_state.get(_job_open_key(key), False)
+    state_key = _job_open_key(key)
+    if default_open and state_key not in st.session_state:
+        st.session_state[state_key] = True
+    is_open = st.session_state.get(state_key, default_open)
 
     with st.container(border=True):
-        _render_match_card_header(result, css_id, key)
+        _render_match_card_header(
+            result,
+            css_id,
+            key,
+            allow_toggle=allow_toggle,
+        )
         if is_open:
             st.markdown('<div class="job-match-details-marker"></div>', unsafe_allow_html=True)
             _render_match_card_details(
@@ -848,10 +967,17 @@ def _render_match_card(
                 allow_save=allow_save,
                 key=key,
                 manual_salary=manual_salary,
+                profile=profile,
+                paths=paths,
             )
 
 
 def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | None:
+    st.session_state["live_matches"] = []
+    st.session_state.pop("last_scan_result", None)
+    st.session_state.pop("last_provider_stats", None)
+    _clear_job_card_state()
+
     status_box = st.empty()
     progress_bar = st.progress(0.0, text="Preparazione scansione...")
     metrics_cols = st.columns(5)
@@ -862,7 +988,6 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
     promoted_metric = metrics_cols[4].empty()
     st.markdown("#### Log attività")
     log_box = st.empty()
-    provider_box = st.empty()
     st.markdown("#### Match promossi (in tempo reale)")
     results_container = st.container()
 
@@ -875,7 +1000,18 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
 
     def append_log(message: str) -> None:
         log_lines.append(message)
-        log_box.code("\n".join(log_lines[-24:]), language=None)
+        rendered = html.escape("\n".join(log_lines))
+        log_box.markdown(
+            (
+                "<div style='max-height: 420px; overflow-y: auto; white-space: pre-wrap; "
+                "font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; "
+                "font-size: 0.88rem; line-height: 1.35; padding: 0.75rem 0.9rem; "
+                "border: 1px solid #e5e7eb; border-radius: 8px; background: #fafafa;'>"
+                f"{rendered}"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
 
     def refresh_metrics() -> None:
         found_metric.metric("Trovati", totals["found"])
@@ -941,7 +1077,6 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
             live_matches.append(result)
             totals["promoted"] = len(live_matches)
             refresh_metrics()
-            append_log(f"PROMOSSO [{result.match_score:.1f}] {result.job.title} @ {result.job.company}")
             st.session_state["live_matches"] = [
                 match.model_dump(mode="json") for match in live_matches
             ]
@@ -955,6 +1090,10 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
                     salary_store,
                     key_prefix="scan-live",
                     key_suffix=str(len(live_matches) - 1),
+                    allow_toggle=False,
+                    default_open=True,
+                    profile=profile,
+                    paths=paths,
                 )
         elif event == "companies_discovered":
             companies = payload.get("companies", [])
@@ -965,29 +1104,13 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
                         f"  {company.get('name')} ({company.get('ats')}/{company.get('slug')})"
                     )
         elif event == "search_providers":
-            stats = payload.get("stats", {})
-            st.session_state["last_provider_stats"] = stats
-            phase = payload.get("phase", "ricerca")
-            append_log(f"── Provider ricerca ({phase}) ──")
-            for line in _format_provider_stats_lines(stats):
-                append_log(f"  {line}")
-            with provider_box.container():
-                st.markdown(f"**Provider ricerca** ({phase})")
-                for line in _format_provider_stats_lines(stats):
-                    st.caption(line)
+            st.session_state["last_provider_stats"] = payload.get("stats", {})
         elif event == "complete":
             progress_bar.progress(1.0, text="Scansione completata")
             status_box.success("Scansione completata.")
             append_log("Scansione completata.")
             if payload.get("provider_stats"):
                 st.session_state["last_provider_stats"] = payload["provider_stats"]
-                append_log("── Provider ricerca (totale scansione) ──")
-                for line in _format_provider_stats_lines(payload["provider_stats"]):
-                    append_log(f"  {line}")
-                with provider_box.container():
-                    st.markdown("**Provider ricerca** (totale scansione)")
-                    for line in _format_provider_stats_lines(payload["provider_stats"]):
-                        st.caption(line)
 
     refresh_metrics()
 
@@ -1028,6 +1151,7 @@ def render_saved_tab(paths: ProfilePaths) -> None:
     saved_store = _saved_store(paths)
     salary_store = _salary_store(paths)
     salary_overrides = salary_store.as_dict()
+    profile = UserProfile.load(paths.profile_path)
     applications = saved_store.list_sorted()
 
     if not applications:
@@ -1068,6 +1192,8 @@ def render_saved_tab(paths: ProfilePaths) -> None:
             allow_save=False,
             key_prefix="saved",
             key_suffix=str(index),
+            profile=profile,
+            paths=paths,
         )
         if st.button(
             "Rimuovi dai salvati",
@@ -1092,6 +1218,7 @@ def render_history_tab(paths: ProfilePaths) -> None:
     saved_store = _saved_store(paths)
     salary_store = _salary_store(paths)
     salary_overrides = salary_store.as_dict()
+    profile = UserProfile.load(paths.profile_path)
     grouped = history.group_by_day()
 
     if not grouped:
@@ -1148,6 +1275,8 @@ def render_history_tab(paths: ProfilePaths) -> None:
                         salary_store,
                         key_prefix="history-flat",
                         key_suffix=str(index),
+                        profile=profile,
+                        paths=paths,
                     )
                     st.divider()
         return
@@ -1189,6 +1318,8 @@ def render_history_tab(paths: ProfilePaths) -> None:
                             salary_store,
                             key_prefix="history",
                             key_suffix=f"{day.isoformat()}-{scan_index}-{match_index}",
+                            profile=profile,
+                            paths=paths,
                         )
                         if match_index < len(sorted_matches) - 1:
                             st.divider()
@@ -1224,6 +1355,9 @@ def render_dashboard_tab(paths: ProfilePaths) -> None:
         key=f"start-scan-{paths.slug}",
     ):
         st.session_state["live_matches"] = []
+        st.session_state.pop("last_scan_result", None)
+        st.session_state.pop("last_provider_stats", None)
+        _clear_job_card_state()
         _run_live_scan(profile, paths)
 
     scan_data = st.session_state.get("last_scan_result")
@@ -1264,6 +1398,8 @@ def render_dashboard_tab(paths: ProfilePaths) -> None:
                 salary_store,
                 key_prefix="dash-live",
                 key_suffix=str(index),
+                profile=profile,
+                paths=paths,
             )
         return
 
@@ -1281,6 +1417,8 @@ def render_dashboard_tab(paths: ProfilePaths) -> None:
             salary_store,
             key_prefix="dash",
             key_suffix=str(index),
+            profile=profile,
+            paths=paths,
         )
 
 

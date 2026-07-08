@@ -18,11 +18,14 @@ Usa la ricerca web per trovare annunci REALI e attuali.
 Regole:
 - Cerca su LinkedIn Jobs, Indeed, StepStone, Lever, Greenhouse, Workday e siti careers.
 - Includi solo URL che sembrano pagine di singole offerte o listing affidabili.
+- Se l'URL punta a un listing aggregato, aprilo e recupera i link delle singole offerte prima di rispondere.
+- `title` deve essere il titolo reale dell'annuncio nel link (non generico o copiato dalla query).
+- `company` deve essere il nome azienda specifico dell'annuncio.
 - Rispondi SOLO con json valido:
 {
   "results": [
     {
-      "title": "Software Engineer",
+      "title": "Backend Software Engineer (Python)",
       "company": "Acme",
       "url": "https://...",
       "description": "breve estratto",
