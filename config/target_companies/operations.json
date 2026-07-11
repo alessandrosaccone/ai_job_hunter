@@ -1,0 +1,72 @@
+[
+  {
+    "name": "Celonis",
+    "ats": "greenhouse",
+    "slug": "celonis",
+    "region": "us",
+    "fields": ["operations"]
+  },
+  {
+    "name": "Flexport",
+    "ats": "greenhouse",
+    "slug": "flexport",
+    "region": "us",
+    "fields": ["operations"]
+  },
+  {
+    "name": "Intercom",
+    "ats": "greenhouse",
+    "slug": "intercom",
+    "region": "us",
+    "fields": ["operations"]
+  },
+  {
+    "name": "Justworks",
+    "ats": "greenhouse",
+    "slug": "justworks",
+    "region": "us",
+    "fields": ["operations"]
+  },
+  {
+    "name": "Lattice",
+    "ats": "greenhouse",
+    "slug": "lattice",
+    "region": "us",
+    "fields": ["operations"]
+  },
+  {
+    "name": "Motive",
+    "ats": "greenhouse",
+    "slug": "gomotive",
+    "region": "us",
+    "fields": ["operations"]
+  },
+  {
+    "name": "Project44",
+    "ats": "greenhouse",
+    "slug": "project44",
+    "region": "us",
+    "fields": ["operations"]
+  },
+  {
+    "name": "Remote",
+    "ats": "greenhouse",
+    "slug": "remotecom",
+    "region": "us",
+    "fields": ["operations"]
+  },
+  {
+    "name": "Samsara",
+    "ats": "greenhouse",
+    "slug": "samsara",
+    "region": "us",
+    "fields": ["operations"]
+  },
+  {
+    "name": "Workato",
+    "ats": "greenhouse",
+    "slug": "workato",
+    "region": "us",
+    "fields": ["operations"]
+  }
+]

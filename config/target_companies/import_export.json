@@ -1,0 +1,44 @@
+[
+  {
+    "name": "Flexport",
+    "ats": "greenhouse",
+    "slug": "flexport",
+    "region": "us",
+    "fields": ["import_export"]
+  },
+  {
+    "name": "FourKites",
+    "ats": "greenhouse",
+    "slug": "fourkites",
+    "region": "us",
+    "fields": ["import_export"]
+  },
+  {
+    "name": "Motive",
+    "ats": "greenhouse",
+    "slug": "gomotive",
+    "region": "us",
+    "fields": ["import_export"]
+  },
+  {
+    "name": "Nuro",
+    "ats": "greenhouse",
+    "slug": "nuro",
+    "region": "us",
+    "fields": ["import_export"]
+  },
+  {
+    "name": "Project44",
+    "ats": "greenhouse",
+    "slug": "project44",
+    "region": "us",
+    "fields": ["import_export"]
+  },
+  {
+    "name": "Samsara",
+    "ats": "greenhouse",
+    "slug": "samsara",
+    "region": "us",
+    "fields": ["import_export"]
+  }
+]

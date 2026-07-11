@@ -19,6 +19,7 @@ from agents.location_matcher import LocationMatcher
 from agents.role_matcher import RoleMatcher
 from agents.salary_researcher import SalaryResearcher
 from agents.search_providers.router import JobSearchRouter
+from agents.big_tech_hunter import BigTechHunter
 from agents.startup_discoverer import StartupDiscoverer
 from agents.target_hunter import TargetHunter
 from models.job import JobPosting, MatchResult, ScanResult
@@ -33,12 +34,21 @@ DEFAULT_SCAN_RESULTS_PATH = Path("data/scan_results.json")
 ProgressCallback = Callable[[str, dict[str, Any]], None]
 
 
+def _coerce_job_posting(job: JobPosting) -> JobPosting:
+    if isinstance(job, JobPosting):
+        return job
+    if hasattr(job, "model_dump"):
+        return JobPosting.model_validate(job.model_dump(mode="json"))
+    return JobPosting.model_validate(job)
+
+
 class JobHunterOrchestrator:
     def __init__(
         self,
         memory: JobMemory | None = None,
         target_hunter: TargetHunter | None = None,
         startup_discoverer: StartupDiscoverer | None = None,
+        big_tech_hunter: BigTechHunter | None = None,
         ai_matcher: AIMatcher | None = None,
         search_router: JobSearchRouter | None = None,
         location_matcher: LocationMatcher | None = None,
@@ -53,6 +63,9 @@ class JobHunterOrchestrator:
         self.search_router = search_router or JobSearchRouter()
         self.target_hunter = target_hunter or TargetHunter()
         self.startup_discoverer = startup_discoverer or StartupDiscoverer(
+            search_router=self.search_router,
+        )
+        self.big_tech_hunter = big_tech_hunter or BigTechHunter(
             search_router=self.search_router,
         )
         self.ai_matcher = ai_matcher or AIMatcher(
@@ -119,6 +132,28 @@ class JobHunterOrchestrator:
             )
             return jobs
 
+        async def run_big_tech_hunter() -> list[JobPosting]:
+            if not read_uses_web_search(profile):
+                self._emit(
+                    on_progress,
+                    "agent_done",
+                    {"agent": "Big Tech Hunter", "count": 0, "skipped": True},
+                )
+                return []
+
+            self._emit(
+                on_progress,
+                "status",
+                {"message": "Big Tech Hunter in esecuzione (Google, IBM, Microsoft, Meta, Amazon...)..."},
+            )
+            jobs = await self.big_tech_hunter.safe_run(profile, on_progress=on_progress)
+            self._emit(
+                on_progress,
+                "agent_done",
+                {"agent": "Big Tech Hunter", "count": len(jobs)},
+            )
+            return jobs
+
         async def run_target_hunter() -> list[JobPosting]:
             self._emit(
                 on_progress,
@@ -140,12 +175,30 @@ class JobHunterOrchestrator:
                 logger.exception("[Target Hunter] Agent failed but pipeline continues: %s", exc)
                 return []
 
-        startup_jobs, target_jobs = await asyncio.gather(
+        startup_jobs, target_jobs, bigtech_jobs = await asyncio.gather(
             run_startup_discoverer(),
             run_target_hunter(),
+            run_big_tech_hunter(),
+        )
+        self._emit(
+            on_progress,
+            "phase_done",
+            {
+                "phase": "collection",
+                "message": (
+                    f"Raccolta iniziale finita: {len(target_jobs)} da Target Hunter, "
+                    f"{len(startup_jobs)} da Startup Discoverer, "
+                    f"{len(bigtech_jobs)} da Big Tech Hunter."
+                ),
+            },
         )
 
         if read_uses_web_search(profile):
+            self._emit(
+                on_progress,
+                "status",
+                {"message": "Verifica aziende ATS dinamiche dai risultati web..."},
+            )
             self._emit(
                 on_progress,
                 "search_providers",
@@ -157,10 +210,20 @@ class JobHunterOrchestrator:
 
             known_companies = self._all_known_companies(profile)
             newly_verified = await discover_and_verify_companies(
-                startup_jobs,
+                startup_jobs + bigtech_jobs,
                 profile,
                 known_companies,
                 self.target_hunter,
+            )
+            self._emit(
+                on_progress,
+                "phase_done",
+                {
+                    "phase": "ats_discovery",
+                    "message": (
+                        f"Discovery ATS completata: {len(newly_verified)} nuove aziende verificate."
+                    ),
+                },
             )
         else:
             self._emit(
@@ -191,8 +254,20 @@ class JobHunterOrchestrator:
                 "agent_done",
                 {"agent": "Target Hunter (ATS dinamico)", "count": len(dynamic_jobs)},
             )
+            self._emit(
+                on_progress,
+                "phase_done",
+                {
+                    "phase": "dynamic_target_hunter",
+                    "message": (
+                        f"Fetch ATS dinamico completato: {len(dynamic_jobs)} annunci aggiunti."
+                    ),
+                },
+            )
 
-        merged_jobs = self._deduplicate_jobs(target_jobs + dynamic_jobs + startup_jobs)
+        merged_jobs = self._deduplicate_jobs(
+            target_jobs + dynamic_jobs + startup_jobs + bigtech_jobs
+        )
         new_jobs = self.memory.get_new_jobs(merged_jobs)
         if new_jobs:
             self._emit(
@@ -203,12 +278,40 @@ class JobHunterOrchestrator:
             title_enricher = JobTitleEnricher()
             async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
                 new_jobs = await title_enricher.enrich_many(client, new_jobs)
+            self._emit(
+                on_progress,
+                "phase_done",
+                {
+                    "phase": "title_enrichment",
+                    "message": f"Arricchimento titoli completato su {len(new_jobs)} nuovi annunci.",
+                },
+            )
+        else:
+            self._emit(
+                on_progress,
+                "phase_done",
+                {
+                    "phase": "title_enrichment",
+                    "message": "Nessun nuovo annuncio da arricchire.",
+                },
+            )
         eligible_jobs, prefilter_skipped = await filter_jobs_for_ai(
             new_jobs,
             profile,
             location_matcher=self.location_matcher,
             role_matcher=self.role_matcher,
             on_progress=on_progress,
+        )
+        self._emit(
+            on_progress,
+            "phase_done",
+            {
+                "phase": "prefilter",
+                "message": (
+                    f"Pre-filtro completato: {len(eligible_jobs)} idonei, "
+                    f"{prefilter_skipped} scartati prima dell'AI."
+                ),
+            },
         )
         self._emit(
             on_progress,
@@ -293,6 +396,17 @@ class JobHunterOrchestrator:
 
         promoted.sort(key=lambda item: item.match_score, reverse=True)
         self.memory.save()
+        self._emit(
+            on_progress,
+            "phase_done",
+            {
+                "phase": "ai_analysis",
+                "message": (
+                    f"Analisi AI completata: {len(match_results)} analizzati, "
+                    f"{len(promoted)} promossi."
+                ),
+            },
+        )
 
         scan_result = ScanResult(
             matches=promoted,
@@ -339,12 +453,14 @@ class JobHunterOrchestrator:
         profile: UserProfile,
     ) -> tuple[MatchResult, str]:
         """Fetch full job description from the posting page, then re-run AI matching."""
+        job = _coerce_job_posting(job)
         previous_len = len((job.description or "").strip())
         enricher = JobTitleEnricher()
         async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
             enriched_job, description_enriched, page_fetched = (
                 await enricher.enrich_for_accurate_match(client, job)
             )
+        enriched_job = _coerce_job_posting(enriched_job)
 
         result = await self.ai_matcher.match(enriched_job, profile)
         if description_enriched:

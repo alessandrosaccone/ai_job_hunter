@@ -1,20 +1,27 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 
+from agents.company_config import company_storage_key
 from models.job import JobPosting
 from models.user_profile import UserProfile
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_ATS = frozenset({"lever", "greenhouse"})
+SUPPORTED_ATS = frozenset({"lever", "greenhouse", "workday"})
+WORKDAY_HOST_RE = re.compile(r"^([a-z0-9_-]+)\.wd\d+\.myworkdayjobs\.com$", re.I)
+WORKDAY_SITE_HOST_RE = re.compile(r"^([a-z0-9_-]+)\.myworkdaysite\.com$", re.I)
+LOCALE_RE = re.compile(r"^[a-z]{2}-[a-z]{2}$", re.I)
 
 
-def company_key(ats: str, slug: str) -> str:
+def company_key(ats: str, slug: str, *, tenant: str = "") -> str:
+    if ats.lower() == "workday":
+        return f"workday:{tenant.lower()}:{slug.lower()}"
     return f"{ats.lower()}:{slug.lower()}"
 
 
@@ -40,6 +47,27 @@ def parse_ats_from_url(url: str) -> dict[str, str] | None:
             "region": "eu" if "eu.greenhouse.io" in host else "us",
         }
 
+    tenant_match = WORKDAY_HOST_RE.match(host) or WORKDAY_SITE_HOST_RE.match(host)
+    if tenant_match and parts:
+        locale = "en-US"
+        site_index = 0
+        if LOCALE_RE.match(parts[0]):
+            locale = parts[0]
+            site_index = 1
+        if site_index >= len(parts):
+            return None
+        site = parts[site_index]
+        if site.lower() in {"job", "jobs", "apply"}:
+            return None
+        return {
+            "ats": "workday",
+            "slug": site,
+            "tenant": tenant_match.group(1),
+            "host": host,
+            "locale": locale,
+            "region": "eu",
+        }
+
     return None
 
 
@@ -58,12 +86,12 @@ def extract_ats_candidates(jobs: list[JobPosting]) -> list[dict[str, Any]]:
 
         ats = parsed["ats"]
         slug = parsed["slug"]
-        key = company_key(ats, slug)
+        key = company_key(ats, slug, tenant=parsed.get("tenant", ""))
         if key in candidates:
             continue
 
         name = job.company.strip() or _slug_to_name(slug)
-        candidates[key] = {
+        candidate = {
             "name": name,
             "ats": ats,
             "slug": slug,
@@ -71,6 +99,11 @@ def extract_ats_candidates(jobs: list[JobPosting]) -> list[dict[str, Any]]:
             "fields": ["tech"],
             "source_url": job.url,
         }
+        if ats == "workday":
+            candidate["tenant"] = parsed["tenant"]
+            candidate["host"] = parsed["host"]
+            candidate["locale"] = parsed.get("locale", "en-US")
+        candidates[key] = candidate
 
     return list(candidates.values())
 
@@ -81,7 +114,7 @@ def known_company_keys(companies: list[dict[str, Any]]) -> set[str]:
         ats = str(company.get("ats", "")).lower()
         slug = str(company.get("slug", "")).lower()
         if ats in SUPPORTED_ATS and slug:
-            keys.add(company_key(ats, slug))
+            keys.add(company_storage_key(company))
     return keys
 
 
@@ -114,7 +147,12 @@ async def discover_and_verify_companies(
     candidates = [
         candidate
         for candidate in extract_ats_candidates(jobs)
-        if company_key(candidate["ats"], candidate["slug"]) not in known_keys
+        if company_key(
+            candidate["ats"],
+            candidate["slug"],
+            tenant=candidate.get("tenant", ""),
+        )
+        not in known_keys
     ]
 
     if not candidates:

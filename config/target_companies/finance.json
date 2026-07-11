@@ -1,0 +1,107 @@
+[
+  {
+    "name": "Adyen",
+    "ats": "greenhouse",
+    "slug": "adyen",
+    "region": "us",
+    "fields": ["finance"]
+  },
+  {
+    "name": "Affirm",
+    "ats": "greenhouse",
+    "slug": "affirm",
+    "region": "us",
+    "fields": ["finance"]
+  },
+  {
+    "name": "Bitpanda",
+    "ats": "greenhouse",
+    "slug": "bitpanda",
+    "region": "us",
+    "fields": ["finance"]
+  },
+  {
+    "name": "Brex",
+    "ats": "greenhouse",
+    "slug": "brex",
+    "region": "us",
+    "fields": ["finance"]
+  },
+  {
+    "name": "Chime",
+    "ats": "greenhouse",
+    "slug": "chime",
+    "region": "us",
+    "fields": ["finance"]
+  },
+  {
+    "name": "Flex",
+    "ats": "greenhouse",
+    "slug": "flex",
+    "region": "us",
+    "fields": ["finance"]
+  },
+  {
+    "name": "Greenlight",
+    "ats": "lever",
+    "slug": "greenlight",
+    "region": "us",
+    "fields": ["finance"]
+  },
+  {
+    "name": "Marqeta",
+    "ats": "greenhouse",
+    "slug": "marqeta",
+    "region": "us",
+    "fields": ["finance"]
+  },
+  {
+    "name": "Mercury",
+    "ats": "greenhouse",
+    "slug": "mercury",
+    "region": "us",
+    "fields": ["finance"]
+  },
+  {
+    "name": "Monzo",
+    "ats": "greenhouse",
+    "slug": "monzo",
+    "region": "us",
+    "fields": ["finance"]
+  },
+  {
+    "name": "Nubank",
+    "ats": "greenhouse",
+    "slug": "nubank",
+    "region": "us",
+    "fields": ["finance"]
+  },
+  {
+    "name": "Ocrolus",
+    "ats": "greenhouse",
+    "slug": "ocrolusinc",
+    "region": "us",
+    "fields": ["finance"]
+  },
+  {
+    "name": "Robinhood",
+    "ats": "greenhouse",
+    "slug": "robinhood",
+    "region": "us",
+    "fields": ["finance"]
+  },
+  {
+    "name": "Stripe",
+    "ats": "greenhouse",
+    "slug": "stripe",
+    "region": "us",
+    "fields": ["finance"]
+  },
+  {
+    "name": "Trade Republic",
+    "ats": "greenhouse",
+    "slug": "traderepublic",
+    "region": "us",
+    "fields": ["finance"]
+  }
+]

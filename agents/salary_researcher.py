@@ -9,6 +9,7 @@ import httpx
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from agents.deepseek_web_search import deepseek_web_search
 from agents.job_prefilter import _extract_salary_range
 from agents.search_providers.router import JobSearchRouter
 from models.job import JobPosting
@@ -19,8 +20,12 @@ logger = logging.getLogger(__name__)
 SALARY_QUERY_TEMPLATES = (
     "RAL stipendio {title} {company} {location}",
     "{title} salary {company} site:glassdoor.com",
+    "{title} stipendio {company} site:glassdoor.it",
     "{title} {company} salary site:levels.fyi",
+    "{title} {company} compensation pay range",
+    "{company} {title} retribuzione RAL",
     "stipendio medio {title} {location} EUR",
+    "quanto guadagna {title} {location}",
 )
 LEVEL_TERMS: dict[str, tuple[str, ...]] = {
     "internship": ("intern", "internship", "stage", "trainee"),
@@ -44,6 +49,25 @@ Rispondi SOLO con json valido:
   "research_summary": "Breve spiegazione in italiano con fonti e affidabilità.",
   "confidence": "low|medium|high",
   "sources": ["url fonte"]
+}
+"""
+
+SALARY_WEB_EVIDENCE_SYSTEM = """Sei un ricercatore compensazioni.
+Usa la ricerca web per trovare SOLO fonti che riportano cifre salariali esplicite per ruolo, azienda o ruolo simile nella stessa area.
+
+Regole:
+- Non inventare cifre.
+- Includi un risultato solo se lo snippet contiene numeri di stipendio/compenso/RAL.
+- Preferisci Glassdoor, Levels.fyi, Indeed, Talent.com, job posting ufficiali e salary guide affidabili.
+- Rispondi SOLO con json valido:
+{
+  "results": [
+    {
+      "title": "titolo fonte",
+      "link": "https://...",
+      "snippet": "estratto con cifra esplicita"
+    }
+  ]
 }
 """
 
@@ -121,6 +145,16 @@ class SalaryResearcher:
             return self._cache[cache_key]
 
         snippets, provider, source_urls = await self._gather_web_evidence(job, profile)
+        deepseek_used = False
+        if self.is_configured:
+            deepseek_snippets, deepseek_sources = await self._gather_deepseek_salary_evidence(
+                job,
+                profile,
+            )
+            if deepseek_snippets:
+                deepseek_used = True
+                snippets.extend(deepseek_snippets)
+                source_urls = list(dict.fromkeys([*source_urls, *deepseek_sources]))
         if not snippets:
             result = SalaryResearchResult(
                 research_summary=(
@@ -138,13 +172,14 @@ class SalaryResearcher:
             profile=profile,
         )
         all_sources = list(dict.fromkeys([*extracted_sources, *source_urls]))[:5]
+        provider_label = "DeepSeek web" if deepseek_used and not provider else provider
 
         if extracted_salary:
             summary = await self._summarize_evidence(
                 job,
                 profile,
                 snippets,
-                provider,
+                provider_label,
                 extracted_salary,
                 confidence="high" if len(extracted_sources) >= 2 else "medium",
             )
@@ -152,7 +187,7 @@ class SalaryResearcher:
                 estimated_salary_eur=extracted_salary,
                 research_summary=summary or (
                     f"RAL non indicata nell'annuncio. Range ricavato da fonti web "
-                    f"({provider or 'ricerca'}): {extracted_salary}."
+                    f"({provider_label or 'ricerca'}): {extracted_salary}."
                 ),
                 confidence="high" if len(extracted_sources) >= 2 else "medium",
                 sources=all_sources,
@@ -163,7 +198,7 @@ class SalaryResearcher:
                 profile,
                 snippets,
                 all_sources,
-                provider,
+                provider_label,
             )
             result = SalaryResearchResult(
                 estimated_salary_eur=synthesized.estimated_salary_eur,
@@ -175,7 +210,7 @@ class SalaryResearcher:
             result = SalaryResearchResult(
                 research_summary=(
                     f"RAL non indicata nell'annuncio. Trovati {len(snippets)} risultati web "
-                    f"({provider or 'n/d'}) ma nessuna cifra leggibile negli estratti."
+                    f"({provider_label or 'n/d'}) ma nessuna cifra leggibile negli estratti."
                 ),
                 confidence="low",
                 sources=all_sources,
@@ -183,6 +218,39 @@ class SalaryResearcher:
 
         self._cache[cache_key] = result
         return result
+
+    async def _gather_deepseek_salary_evidence(
+        self,
+        job: JobPosting,
+        profile: UserProfile,
+    ) -> tuple[list[dict[str, str]], list[str]]:
+        location = job.location or profile.search_location_query()
+        prompt = (
+            f"Trova fonti web con cifre salariali esplicite per:\n"
+            f"- Ruolo: {job.title}\n"
+            f"- Azienda: {job.company}\n"
+            f"- Località: {location}\n"
+            f"- Livello candidato: {profile.experience_level}\n"
+            f"- Ruoli target: {', '.join(profile.target_roles)}\n\n"
+            "Se non trovi cifre esplicite, restituisci results vuoto."
+        )
+        try:
+            text, sources = await deepseek_web_search(
+                system_prompt=SALARY_WEB_EVIDENCE_SYSTEM,
+                user_prompt=prompt,
+                api_key=self.api_key,
+                model=self.model,
+                max_uses=4,
+                max_tokens=1800,
+                timeout_seconds=self.timeout_seconds,
+            )
+        except Exception as exc:
+            logger.warning("[SalaryResearcher] DeepSeek salary web fallback failed: %s", exc)
+            return [], []
+
+        snippets = _parse_deepseek_salary_evidence(text)
+        source_urls = list(dict.fromkeys([*(item.get("link", "") for item in snippets), *sources]))
+        return snippets, [url for url in source_urls if url]
 
     async def _gather_web_evidence(
         self,
@@ -440,3 +508,39 @@ def _parse_salary_json(text: str) -> SalaryResearchResponse:
         if not match:
             raise
         return SalaryResearchResponse.model_validate(json.loads(match.group(0)))
+
+
+def _parse_deepseek_salary_evidence(text: str) -> list[dict[str, str]]:
+    cleaned = text.strip()
+    if not cleaned:
+        return []
+    try:
+        payload = json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+        if not match:
+            return []
+        try:
+            payload = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return []
+
+    results = payload.get("results", [])
+    if not isinstance(results, list):
+        return []
+
+    snippets: list[dict[str, str]] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        snippet = str(item.get("snippet", "")).strip()
+        if not snippet or _extract_salary_range(snippet) is None:
+            continue
+        snippets.append(
+            {
+                "title": str(item.get("title", "")).strip(),
+                "link": str(item.get("link", "")).strip(),
+                "snippet": snippet,
+            },
+        )
+    return snippets

@@ -1,0 +1,72 @@
+[
+  {
+    "name": "Contentful",
+    "ats": "greenhouse",
+    "slug": "contentful",
+    "region": "us",
+    "fields": ["design"]
+  },
+  {
+    "name": "DevRev",
+    "ats": "greenhouse",
+    "slug": "devrev",
+    "region": "us",
+    "fields": ["design"]
+  },
+  {
+    "name": "Figma",
+    "ats": "greenhouse",
+    "slug": "figma",
+    "region": "us",
+    "fields": ["design"]
+  },
+  {
+    "name": "Glean",
+    "ats": "greenhouse",
+    "slug": "gleanwork",
+    "region": "us",
+    "fields": ["design"]
+  },
+  {
+    "name": "Miro",
+    "ats": "greenhouse",
+    "slug": "realtimeboardglobal",
+    "region": "us",
+    "fields": ["design"]
+  },
+  {
+    "name": "Ocrolus",
+    "ats": "greenhouse",
+    "slug": "ocrolusinc",
+    "region": "us",
+    "fields": ["design"]
+  },
+  {
+    "name": "Together AI",
+    "ats": "greenhouse",
+    "slug": "togetherai",
+    "region": "us",
+    "fields": ["design"]
+  },
+  {
+    "name": "Typeform",
+    "ats": "greenhouse",
+    "slug": "typeform",
+    "region": "us",
+    "fields": ["design"]
+  },
+  {
+    "name": "VSCO",
+    "ats": "greenhouse",
+    "slug": "vsco39",
+    "region": "us",
+    "fields": ["design"]
+  },
+  {
+    "name": "Webflow",
+    "ats": "greenhouse",
+    "slug": "webflow",
+    "region": "us",
+    "fields": ["design"]
+  }
+]

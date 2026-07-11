@@ -57,6 +57,10 @@ BAD_COMPANY_NAMES = {
     "indeed",
     "glassdoor",
 }
+SCRAPED_TITLE_NOISE_RE = re.compile(
+    r"(?:[\s._-]+)?(?:jv_)?ic\d+[_-]ko\d+,\d+[_-]ke\d+,\d+(?:\.[a-z0-9]+)?$",
+    re.I,
+)
 JSON_LD_RE = re.compile(
     r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
     re.I | re.S,
@@ -136,6 +140,15 @@ def needs_company_enrichment(company: str) -> bool:
     return False
 
 
+def clean_scraped_title(title: str) -> str:
+    cleaned = unescape(title or "").strip()
+    if not cleaned:
+        return ""
+    cleaned = SCRAPED_TITLE_NOISE_RE.sub("", cleaned).strip(" -_.,")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
 DIRECT_JOB_POSTING_MARKERS = (
     "linkedin.com/jobs/view",
     "jobs.lever.co",
@@ -175,7 +188,7 @@ def needs_accurate_match(job: JobPosting) -> bool:
 
 
 def parse_social_title(raw_title: str) -> tuple[str | None, str | None]:
-    title = unescape(raw_title or "").strip()
+    title = clean_scraped_title(raw_title)
     if not title:
         return None, None
 
@@ -297,7 +310,7 @@ def extract_from_html(html: str, url: str) -> dict[str, str]:
 
 
 def title_from_description(description: str) -> str | None:
-    cleaned = unescape(description or "").strip()
+    cleaned = clean_scraped_title(description)
     if not cleaned or looks_like_bulk_listing_title(cleaned):
         return None
 
@@ -334,10 +347,12 @@ def title_from_reasoning(reasoning: str) -> str | None:
 
 
 def refine_job_metadata(job: JobPosting) -> JobPosting:
-    title = (job.title or "").strip()
+    title = clean_scraped_title(job.title)
     company = (job.company or "").strip()
     parsed_title, parsed_company = parse_social_title(title)
     updates: dict[str, Any] = {}
+    if title and title != job.title:
+        updates["title"] = title
     if parsed_title and parsed_title != title:
         updates["title"] = parsed_title
     if parsed_company and needs_company_enrichment(company):
@@ -626,29 +641,52 @@ def _title_from_url_slug(url: str) -> str | None:
     slug = parsed.path.rstrip("/").split("/")[-1]
     slug = re.sub(r"^jv_", "", slug, flags=re.I)
     slug = re.sub(r"-\d{6,}$", "", slug)
-    slug = slug.replace("-", " ").strip()
+    slug = clean_scraped_title(slug.replace("-", " ").strip())
     if slug and len(slug) > 3 and not slug.isdigit() and not looks_like_bulk_listing_title(slug):
         return slug.title()
     return None
 
 
 def _salary_from_json_ld(value: Any) -> str | None:
+    if isinstance(value, list):
+        for item in value:
+            salary = _salary_from_json_ld(item)
+            if salary:
+                return salary
     if isinstance(value, dict):
         currency = str(value.get("currency") or "EUR").upper()
         raw_value = value.get("value")
         if isinstance(raw_value, dict):
-            low = raw_value.get("minValue") or raw_value.get("value")
-            high = raw_value.get("maxValue") or raw_value.get("value")
+            low = _coerce_salary_amount(raw_value.get("minValue") or raw_value.get("value"))
+            high = _coerce_salary_amount(raw_value.get("maxValue") or raw_value.get("value"))
             if low is not None and high is not None:
-                low_int = int(float(low))
-                high_int = int(float(high))
                 if currency == "EUR":
-                    return format_salary_range_eur(min(low_int, high_int), max(low_int, high_int))
-                amount = max(low_int, high_int)
+                    return format_salary_range_eur(min(low, high), max(low, high))
+                amount = max(low, high)
                 return f"{amount:,}".replace(",", ".") + f" {currency}"
-        if value.get("value") is not None:
-            amount = int(float(value["value"]))
+        amount = _coerce_salary_amount(value.get("value"))
+        if amount is not None:
             if currency == "EUR":
                 return format_salary_range_eur(amount, amount)
             return f"{amount:,}".replace(",", ".") + f" {currency}"
+    return None
+
+
+def _coerce_salary_amount(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        amount = int(value)
+    else:
+        cleaned = str(value).strip()
+        match = re.search(r"\d{1,3}(?:[.,]\d{3})+|\d{2,3}\s*[kK]|\d{5,6}", cleaned)
+        if not match:
+            return None
+        raw = match.group(0).lower().replace(" ", "")
+        if raw.endswith("k"):
+            amount = int(raw[:-1]) * 1000
+        else:
+            amount = int(raw.replace(".", "").replace(",", ""))
+    if 10_000 <= amount <= 600_000:
+        return amount
     return None

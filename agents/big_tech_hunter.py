@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -10,10 +11,8 @@ from urllib.parse import urlparse
 import httpx
 
 from agents.base import BaseAgent
-from agents.company_config import load_target_companies
 from agents.job_prefilter import _experience_level_matches
 from agents.job_listing_expander import JobListingExpander
-from agents.keyword_expander import KeywordExpander
 from agents.search_providers.router import JobSearchRouter
 from models.job import JobPosting
 from models.user_profile import UserProfile, read_uses_web_search
@@ -22,12 +21,11 @@ logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str, dict[str, Any]], None]
 
-DEFAULT_COMPANIES_PATH = Path("config/target_companies.json")
-MAX_KEYWORDS_PER_SCAN = 5
-MAX_QUERIES_PER_KEYWORD = 3
+DEFAULT_BIG_TECH_PATH = Path("config/big_tech_companies.json")
+MAX_ROLES_PER_SCAN = 3
 MAX_CONCURRENT_SEARCHES = 4
 MAX_CONCURRENT_EXPANSIONS = 3
-MAX_LISTING_EXPANSIONS = 12
+MAX_LISTING_EXPANSIONS = 8
 JOB_BOARD_DOMAINS = (
     "jobs.lever.co",
     "boards.greenhouse.io",
@@ -40,31 +38,28 @@ JOB_BOARD_DOMAINS = (
     "stepstone.it",
     "stepstone.de",
     "infojobs.it",
+    "careers.google.com",
+    "careers.ibm.com",
+    "careers.microsoft.com",
+    "metacareers.com",
+    "careers.meta.com",
+    "amazon.jobs",
+    "jobs.apple.com",
+    "jobs.netflix.com",
 )
 
-QUERY_TEMPLATES = (
-    "{keyword} {location}",
-    "{keyword} {location} jobs",
-    "{keyword} site:linkedin.com/jobs {location}",
-    "{keyword} site:indeed.com {location}",
-    "{keyword} site:stepstone.it {location}",
-    "{keyword} (site:myworkdayjobs.com OR site:jobs.lever.co OR site:boards.greenhouse.io) {location}",
-)
 
-
-class StartupDiscoverer(BaseAgent):
-    name = "StartupDiscoverer"
+class BigTechHunter(BaseAgent):
+    name = "BigTechHunter"
 
     def __init__(
         self,
-        companies_path: Path | str = DEFAULT_COMPANIES_PATH,
+        companies_path: Path | str = DEFAULT_BIG_TECH_PATH,
         timeout_seconds: float = 45.0,
-        keyword_expander: KeywordExpander | None = None,
         search_router: JobSearchRouter | None = None,
     ) -> None:
         self.companies_path = Path(companies_path)
         self.timeout_seconds = timeout_seconds
-        self.keyword_expander = keyword_expander or KeywordExpander()
         self.search_router = search_router or JobSearchRouter()
         self.listing_expander = JobListingExpander(search_router=self.search_router)
         self._provider_hits: dict[str, int] = {}
@@ -81,21 +76,32 @@ class StartupDiscoverer(BaseAgent):
             if on_progress:
                 on_progress(event, payload)
 
-        emit("status", {"message": "Espansione keyword (DeepSeek)..."})
-        keywords = await self.keyword_expander.expand(profile)
-        keywords = keywords[:MAX_KEYWORDS_PER_SCAN]
-        excluded_companies = self._load_excluded_companies(profile)
+        companies = self._load_companies()
+        if not companies:
+            logger.warning("[BigTechHunter] No big tech companies configured.")
+            return []
+
+        roles = [role.strip() for role in profile.target_roles if role.strip()][:MAX_ROLES_PER_SCAN]
+        if not roles:
+            logger.warning("[BigTechHunter] No target roles configured.")
+            return []
+
+        role_clause = self._role_clause(roles)
+        location_targets = profile.search_location_targets()
         jobs_by_url: dict[str, JobPosting] = {}
         self._provider_hits = {}
 
+        emit(
+            "status",
+            {"message": f"Big Tech Hunter: ricerca mirata su {len(companies)} aziende..."},
+        )
+
         async with httpx.AsyncClient(timeout=self.timeout_seconds, follow_redirects=True) as client:
-            location_targets = profile.search_location_targets()
             search_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SEARCHES)
             search_tasks = []
-            for keyword in keywords:
+            for company in companies:
                 for location_target in location_targets:
-                    for template in QUERY_TEMPLATES[:MAX_QUERIES_PER_KEYWORD]:
-                        query = template.format(keyword=keyword, location=location_target).strip()
+                    for query in self._build_queries(company, role_clause, location_target):
                         search_tasks.append(
                             self._bounded_search(search_semaphore, client, query, location_target),
                         )
@@ -103,7 +109,7 @@ class StartupDiscoverer(BaseAgent):
             total_searches = len(search_tasks)
             emit(
                 "status",
-                {"message": f"Startup Discoverer: {total_searches} ricerche web in coda..."},
+                {"message": f"Big Tech Hunter: {total_searches} ricerche web in coda..."},
             )
 
             raw_items: list[dict[str, Any]] = []
@@ -112,13 +118,13 @@ class StartupDiscoverer(BaseAgent):
                 try:
                     result = await batch
                 except Exception as exc:
-                    logger.warning("[StartupDiscoverer] Search batch failed: %s", exc)
+                    logger.warning("[BigTechHunter] Search batch failed: %s", exc)
                     result = []
                 completed_searches += 1
                 if isinstance(result, list):
                     raw_items.extend(result)
                 emit(
-                    "startup_search",
+                    "bigtech_search",
                     {
                         "current": completed_searches,
                         "total": total_searches,
@@ -129,7 +135,7 @@ class StartupDiscoverer(BaseAgent):
             if raw_items:
                 emit(
                     "status",
-                    {"message": f"Elaborazione {len(raw_items)} risultati web..."},
+                    {"message": f"Big Tech Hunter: elaborazione {len(raw_items)} risultati web..."},
                 )
 
             expansion_semaphore = asyncio.Semaphore(MAX_CONCURRENT_EXPANSIONS)
@@ -143,13 +149,19 @@ class StartupDiscoverer(BaseAgent):
                     job = self._normalize_result(item, profile)
                     if not job:
                         return []
+                    if not self._matches_big_tech_company(job, companies):
+                        return []
                     if self.listing_expander.should_expand(job):
                         async with expansion_lock:
                             if expansions_done >= expansion_limit:
                                 return []
                             expansions_done += 1
                         expanded = await self.listing_expander.expand(client, job, profile)
-                        return expanded if expanded else []
+                        return [
+                            expanded_job
+                            for expanded_job in (expanded or [])
+                            if self._matches_big_tech_company(expanded_job, companies)
+                        ]
                     return [job]
 
             processing_tasks = [process_item(item) for item in raw_items]
@@ -162,43 +174,120 @@ class StartupDiscoverer(BaseAgent):
                     batch = exc
                 job_batches.append(batch)
                 processed_items += 1
-                if processed_items == 1 or processed_items == len(processing_tasks) or processed_items % 10 == 0:
+                if (
+                    processed_items == 1
+                    or processed_items == len(processing_tasks)
+                    or processed_items % 10 == 0
+                ):
                     normalized_count = sum(
                         len(item)
                         for item in job_batches
                         if isinstance(item, list)
                     )
                     emit(
-                        "startup_processing",
+                        "bigtech_processing",
                         {
                             "current": processed_items,
                             "total": len(processing_tasks),
                             "jobs_found": normalized_count,
                         },
                     )
+
             for batch in job_batches:
                 if isinstance(batch, Exception):
-                    logger.warning("[StartupDiscoverer] Item processing failed: %s", batch)
+                    logger.warning("[BigTechHunter] Item processing failed: %s", batch)
                     continue
                 for job in batch:
-                    if job.company.lower() in excluded_companies:
-                        continue
                     if not _experience_level_matches(job, profile):
                         continue
                     jobs_by_url.setdefault(job.dedup_key, job)
+
             emit(
                 "phase_done",
                 {
-                    "phase": "startup_processing",
+                    "phase": "bigtech_processing",
                     "message": (
-                        f"Elaborazione risultati web completata: {len(jobs_by_url)} annunci unici."
+                        f"Big Tech Hunter completato: {len(jobs_by_url)} annunci unici."
                     ),
                 },
             )
+
         if self._provider_hits:
-            logger.info("[StartupDiscoverer] Provider usage: %s", self._provider_hits)
-        logger.info("[StartupDiscoverer] Collected %s unique jobs.", len(jobs_by_url))
+            logger.info("[BigTechHunter] Provider usage: %s", self._provider_hits)
+        logger.info("[BigTechHunter] Collected %s unique jobs.", len(jobs_by_url))
         return list(jobs_by_url.values())
+
+    def _load_companies(self) -> list[dict[str, Any]]:
+        if not self.companies_path.exists():
+            return []
+        with self.companies_path.open(encoding="utf-8") as handle:
+            companies = json.load(handle)
+        return companies if isinstance(companies, list) else []
+
+    def _role_clause(self, roles: list[str]) -> str:
+        if len(roles) == 1:
+            return f'"{roles[0]}"'
+        return "(" + " OR ".join(f'"{role}"' for role in roles) + ")"
+
+    def _build_queries(
+        self,
+        company: dict[str, Any],
+        role_clause: str,
+        location: str,
+    ) -> list[str]:
+        name = company.get("name", "").strip()
+        aliases = [alias.strip() for alias in company.get("aliases", []) if alias.strip()]
+        domains = [domain.strip() for domain in company.get("career_domains", []) if domain.strip()]
+        labels = [name, *aliases]
+        queries: list[str] = []
+
+        if domains:
+            queries.append(f"site:{domains[0]} {role_clause} {location}")
+        for label in labels[:2]:
+            queries.append(f'"{label}" {role_clause} jobs {location}')
+            queries.append(f'"{label}" {role_clause} site:linkedin.com/jobs {location}')
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for query in queries:
+            cleaned = " ".join(query.split())
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                deduped.append(cleaned)
+        return deduped
+
+    def _company_tokens(self, company: dict[str, Any]) -> set[str]:
+        tokens = {company.get("name", "").strip().lower()}
+        for alias in company.get("aliases", []):
+            if alias:
+                tokens.add(str(alias).strip().lower())
+        for domain in company.get("career_domains", []):
+            host = str(domain).strip().lower()
+            if host:
+                tokens.add(host.split(".")[0])
+        return {token for token in tokens if token}
+
+    def _matches_big_tech_company(
+        self,
+        job: JobPosting,
+        companies: list[dict[str, Any]],
+    ) -> bool:
+        haystack = " ".join(
+            [
+                job.company.lower(),
+                job.title.lower(),
+                job.url.lower(),
+                (job.description or "").lower(),
+            ]
+        )
+        for company in companies:
+            tokens = self._company_tokens(company)
+            if any(token and token in haystack for token in tokens):
+                return True
+            for domain in company.get("career_domains", []):
+                if str(domain).lower() in haystack:
+                    return True
+        return False
 
     async def _bounded_search(
         self,
@@ -210,32 +299,20 @@ class StartupDiscoverer(BaseAgent):
         async with semaphore:
             return await self._search_all_engines(client, query, location)
 
-    def _load_excluded_companies(self, profile: UserProfile) -> set[str]:
-        companies = load_target_companies(
-            self.companies_path,
-            career_field=profile.career_field,
-        )
-        return {
-            company.get("name", "").lower()
-            for company in companies
-            if company.get("name")
-            and profile.career_field in company.get("fields", ["tech"])
-        }
-
     async def _search_all_engines(
         self,
         client: httpx.AsyncClient,
         query: str,
         location: str,
     ) -> list[dict[str, Any]]:
-        google_jobs, _provider = await self.search_router.search(
+        google_jobs, provider = await self.search_router.search(
             client,
             "google_jobs",
             query,
             location,
             job_board_filter=self._is_job_board_url,
         )
-        self._count_provider(_provider, len(google_jobs))
+        self._count_provider(provider, len(google_jobs))
 
         google_web, provider = await self.search_router.search(
             client,
@@ -342,4 +419,3 @@ class StartupDiscoverer(BaseAgent):
             return ""
         host = urlparse(link).netloc.replace("www.", "")
         return host.split(".")[0].replace("-", " ").title()
-

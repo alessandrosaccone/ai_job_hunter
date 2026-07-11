@@ -51,7 +51,7 @@ EXPERIENCE_LEVEL_RULE_OPTIONS = [
     ("or_higher", "Questo livello o X superiori"),
 ]
 SEARCH_MODE_OPTIONS = [
-    ("full", "Completa — Target Hunter + ricerche web (Startup Discoverer, RAL, scoperta ATS da Google)"),
+    ("full", "Completa — Target Hunter + ricerche web (Startup Discoverer, Big Tech Hunter, RAL, scoperta ATS)"),
     ("no_search", "Senza ricerche web — Target Hunter (Lever/Greenhouse) + AI, niente Google/RAL online"),
 ]
 MATCH_SORT_OPTIONS = [
@@ -136,6 +136,7 @@ def _inject_styles() -> None:
             margin: 0;
             flex: 1;
             min-width: 0;
+            padding-right: 8.5rem;
             font-size: 1.55rem;
             font-weight: 700;
             line-height: 1.25;
@@ -154,6 +155,39 @@ def _inject_styles() -> None:
             flex-shrink: 0;
             margin-top: 0.2rem;
             white-space: nowrap;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) [data-testid="stPopover"] {
+            position: absolute;
+            top: 1.2rem;
+            right: 1.2rem;
+            z-index: 2;
+            flex-shrink: 0;
+            margin-top: 0.2rem;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) [data-testid="stPopover"] button {
+            border: 0 !important;
+            border-radius: 999px !important;
+            padding: 0.35rem 0.75rem !important;
+            min-height: auto !important;
+            color: transparent !important;
+            font-size: 0.95rem !important;
+            font-weight: 600 !important;
+            line-height: 1.2 !important;
+            box-shadow: none !important;
+            white-space: nowrap !important;
+            opacity: 0 !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.score-good) [data-testid="stPopover"] button {
+            background: transparent !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.score-mid) [data-testid="stPopover"] button {
+            background: transparent !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.score-low) [data-testid="stPopover"] button {
+            background: transparent !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) [data-testid="stPopover"] button:hover {
+            filter: brightness(0.95);
         }
         div[data-testid="stVerticalBlockBorderWrapper"]:has(.job-match-card-block) [data-testid="stElementContainer"]:has(.job-match-header) + [data-testid="stElementContainer"] {
             padding: 0 1.2rem 0.8rem 1.2rem !important;
@@ -363,14 +397,23 @@ def _render_provider_stats(stats: dict) -> None:
     with st.expander("Provider di ricerca usati", expanded=False):
         for line in _format_provider_stats_lines(stats):
             st.markdown(f"- {line}")
-        st.caption("Include ricerca annunci (Startup Discoverer) e ricerca RAL.")
+        st.caption("Include ricerca annunci (Startup Discoverer, Big Tech Hunter) e ricerca RAL.")
 
 
 def _match_score_threshold() -> float:
     return float(os.getenv("MATCH_SCORE_THRESHOLD", "7"))
 
 
-def _truncate_log_text(text: str, limit: int = 180) -> str:
+def _manual_match_score(result: MatchResult) -> float | None:
+    return getattr(result, "manual_match_score", None)
+
+
+def _effective_match_score(result: MatchResult) -> float:
+    manual_score = _manual_match_score(result)
+    return manual_score if manual_score is not None else result.match_score
+
+
+def _normalize_log_text(text: str) -> str:
     return " ".join(text.split())
 
 
@@ -378,12 +421,37 @@ def _format_ai_rejection_log(result: MatchResult, *, promoted: bool) -> str | No
     if promoted:
         return None
     headline = f"{result.job.title} @ {result.job.company}"
-    reason = _truncate_log_text(result.reasoning or "Nessuna motivazione disponibile.")
+    reason = _normalize_log_text(result.reasoning or "Nessuna motivazione disponibile.")
     if not result.approved:
-        return f"SCARTATO AI [{result.match_score:.1f}] {headline} — {reason}"
+        return f"SCARTATO AI [{result.match_score:.1f}] {headline} - {reason}"
     threshold = _match_score_threshold()
     return (
-        f"SOTTO SOGLIA [{result.match_score:.1f}<{threshold:g}] {headline} — {reason}"
+        f"SOTTO SOGLIA [{result.match_score:.1f}<{threshold:g}] {headline} - {reason}"
+    )
+
+
+def _format_promoted_log(result: MatchResult) -> str:
+    return f"PROMOSSO [{_effective_match_score(result):.1f}] {result.job.title} @ {result.job.company}"
+
+
+def _render_live_log_box(
+    box,
+    lines: list[str],
+    *,
+    empty_text: str,
+    max_height: int = 260,
+) -> None:
+    rendered = html.escape("\n".join(lines) if lines else empty_text)
+    box.markdown(
+        (
+            f"<div style='max-height: {max_height}px; overflow-y: auto; white-space: pre-wrap; "
+            "font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; "
+            "font-size: 0.86rem; line-height: 1.35; padding: 0.75rem 0.9rem; "
+            "border: 1px solid #e5e7eb; border-radius: 8px; background: #fafafa;'>"
+            f"{rendered}"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
     )
 
 
@@ -402,9 +470,9 @@ def _sort_matches(
 ) -> list[MatchResult]:
     overrides = salary_overrides or {}
     if mode == "match_desc":
-        return sorted(matches, key=lambda item: item.match_score, reverse=True)
+        return sorted(matches, key=_effective_match_score, reverse=True)
     if mode == "match_asc":
-        return sorted(matches, key=lambda item: item.match_score)
+        return sorted(matches, key=_effective_match_score)
     if mode == "salary_desc":
         return sorted(
             matches,
@@ -472,7 +540,19 @@ def render_profile_tab(paths: ProfilePaths) -> None:
         )
         selected_level = level_keys[level_labels.index(experience_level)]
 
-        education = st.text_area("Formazione", value=current.education, height=100)
+        education = st.text_area(
+            "Formazione",
+            value=current.education,
+            height=100,
+            help=(
+                "Scrivi livello e ambito di studio, preferibilmente in inglese "
+                "per allinearti alle job description internazionali."
+            ),
+            placeholder=(
+                "es. M.Sc. (Master of Science) in Data Science, University of Milan\n"
+                "B.Sc. in Computer Engineering"
+            ),
+        )
         default_passions = [p for p in current.passions if p in passion_options]
         passions = st.multiselect("Passioni suggerite per il campo", options=passion_options, default=default_passions)
         custom_passions_existing = [p for p in current.passions if p not in passion_options]
@@ -523,7 +603,7 @@ def render_profile_tab(paths: ProfilePaths) -> None:
             help=(
                 "In entrambe le modalità c'è sempre il Target Hunter (API Lever/Greenhouse "
                 "delle aziende in target_companies.json e board già scoperte). "
-                "Senza ricerche web: niente Startup Discoverer, niente ricerca RAL online, "
+                "Senza ricerche web: niente Startup Discoverer, niente Big Tech Hunter, niente ricerca RAL online, "
                 "niente scoperta di nuove aziende da Google."
             ),
         )
@@ -637,16 +717,16 @@ def _persist_updated_match(paths: ProfilePaths, updated: MatchResult) -> None:
                 replaced = True
             else:
                 matches.append(item)
-        if not replaced and updated.approved and updated.match_score >= threshold:
+        if not replaced and updated.approved and _effective_match_score(updated) >= threshold:
             matches.append(updated)
-        matches.sort(key=lambda match: match.match_score, reverse=True)
+        matches.sort(key=_effective_match_score, reverse=True)
         scan_result = scan_result.model_copy(
             update={
                 "matches": matches,
                 "total_promoted": sum(
                     1
                     for match in matches
-                    if match.approved and match.match_score >= threshold
+                    if match.approved and _effective_match_score(match) >= threshold
                 ),
             },
         )
@@ -664,12 +744,14 @@ def _persist_updated_match(paths: ProfilePaths, updated: MatchResult) -> None:
                 replaced = True
             else:
                 live_matches.append(item)
-        if not replaced and updated.approved and updated.match_score >= threshold:
+        if not replaced and updated.approved and _effective_match_score(updated) >= threshold:
             live_matches.append(updated.model_dump(mode="json"))
         st.session_state["live_matches"] = live_matches
 
     saved_store = _saved_store(paths)
     saved_store.update_match(updated)
+    JobMemory(paths.memory_path).update_match(updated)
+    ScanHistoryStore(paths.scan_history_path).update_match(updated, threshold=threshold)
 
 
 def _run_accurate_match_action(
@@ -785,6 +867,64 @@ def _render_salary_editor(
             st.rerun()
 
 
+def _match_score_label(result: MatchResult) -> str:
+    score_text = f"{_effective_match_score(result):.1f}/10"
+    if _manual_match_score(result) is not None:
+        return f"Score tuo {score_text}"
+    return f"Score {score_text}"
+
+
+def _match_score_class(result: MatchResult) -> str:
+    score = _effective_match_score(result)
+    if score >= 8:
+        return "score-good"
+    if score >= 7:
+        return "score-mid"
+    return "score-low"
+
+
+@st.fragment
+def _render_match_score_editor(
+    result: MatchResult,
+    paths: ProfilePaths,
+    *,
+    key: str,
+) -> None:
+    st.markdown(f"**Punteggio AI originale:** {result.match_score:.1f}/10")
+    manual_score = _manual_match_score(result)
+    if manual_score is not None:
+        st.markdown(f"**Match impostato da te:** {manual_score:.1f}/10")
+    new_score = st.number_input(
+        "Il tuo match",
+        min_value=0.0,
+        max_value=10.0,
+        value=float(manual_score if manual_score is not None else result.match_score),
+        step=0.1,
+        format="%.1f",
+        key=f"manual-match-input-{key}",
+    )
+    save_col, clear_col = st.columns(2)
+    with save_col:
+        if st.button("Salva match", use_container_width=True, key=f"manual-match-save-{key}"):
+            payload = result.model_dump(mode="json")
+            payload["manual_match_score"] = float(new_score)
+            _persist_updated_match(paths, MatchResult.model_validate(payload))
+            st.toast("Match personale salvato.")
+            st.rerun()
+    with clear_col:
+        if st.button(
+            "Ripristina AI",
+            use_container_width=True,
+            key=f"manual-match-clear-{key}",
+            disabled=manual_score is None,
+        ):
+            payload = result.model_dump(mode="json")
+            payload["manual_match_score"] = None
+            _persist_updated_match(paths, MatchResult.model_validate(payload))
+            st.toast("Punteggio AI ripristinato.")
+            st.rerun()
+
+
 def _job_open_key(card_key: str) -> str:
     return f"job-open-{card_key}"
 
@@ -815,22 +955,26 @@ def _render_match_card_header(
     card_key: str,
     *,
     allow_toggle: bool,
+    paths: ProfilePaths | None,
 ) -> None:
-    color = _score_color(result.match_score)
+    score_label = _match_score_label(result)
+    score_class = _match_score_class(result)
+    score_color = _score_color(_effective_match_score(result))
     company_bits = [result.job.company]
     if result.job.location:
         company_bits.append(result.job.location)
     company_line = html.escape(" · ".join(bit for bit in company_bits if bit))
     title = html.escape(_display_job_title(result))
-    score_text = f"{result.match_score:.1f}/10"
+    score_html = html.escape(score_label)
     st.markdown(
         f"""
         <div id="{css_id}" class="job-match-card-block"></div>
         <div class="job-match-header">
             <div class="job-match-title-row">
                 <h3 class="job-match-title">{title}</h3>
-                <span class="score-badge job-match-score" style="background:{color};">
-                    Score {score_text}
+                <span class="{score_class}" style="display:none;"></span>
+                <span class="score-badge job-match-score" style="background:{score_color}; cursor:pointer;" title="Clicca per modificare il match personale.">
+                    {score_html}
                 </span>
             </div>
             <p class="job-match-company">{company_line}</p>
@@ -838,6 +982,15 @@ def _render_match_card_header(
         """,
         unsafe_allow_html=True,
     )
+    if paths is not None:
+        with st.popover(
+            score_label,
+            key=f"manual-match-popover-{card_key}",
+            help="Clicca per modificare il match personale.",
+        ):
+            _render_match_score_editor(result, paths, key=card_key)
+    else:
+        st.caption(score_label)
     if allow_toggle:
         st.button(
             "Nascondi dettagli" if st.session_state.get(_job_open_key(card_key), False) else "Mostra dettagli",
@@ -868,17 +1021,6 @@ def _render_match_card_details(
             f"Solo estratto breve ({desc_len} caratteri). "
             "Usa **Match accurato** per leggere l'annuncio completo e ricalcolare il punteggio."
         )
-
-    if result.job.description:
-        preview = result.job.description[:1200]
-        if len(result.job.description) > 1200:
-            preview += "…"
-        with st.expander(
-            f"Descrizione annuncio ({desc_len} caratteri)",
-            expanded=False,
-            key=f"desc-{key}",
-        ):
-            st.write(preview)
 
     with st.expander(
         _ral_expander_label(result, manual_salary),
@@ -957,6 +1099,7 @@ def _render_match_card(
             css_id,
             key,
             allow_toggle=allow_toggle,
+            paths=paths,
         )
         if is_open:
             st.markdown('<div class="job-match-details-marker"></div>', unsafe_allow_html=True)
@@ -986,8 +1129,13 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
     eligible_metric = metrics_cols[2].empty()
     analyzed_metric = metrics_cols[3].empty()
     promoted_metric = metrics_cols[4].empty()
-    st.markdown("#### Log attività")
-    log_box = st.empty()
+    log_col, rejected_col = st.columns([1.15, 1])
+    with log_col:
+        st.markdown("#### Avanzamento")
+        log_box = st.empty()
+    with rejected_col:
+        st.markdown("#### Scartati / sotto soglia")
+        rejected_log_box = st.empty()
     st.markdown("#### Match promossi (in tempo reale)")
     results_container = st.container()
 
@@ -995,23 +1143,29 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
     salary_store = _salary_store(paths)
 
     log_lines: list[str] = []
+    rejected_log_lines: list[str] = []
+    seen_progress_logs: set[str] = set()
     live_matches: list[MatchResult] = []
     totals = {"found": 0, "new": 0, "eligible": 0, "analyzed": 0, "promoted": 0}
 
-    def append_log(message: str) -> None:
-        log_lines.append(message)
-        rendered = html.escape("\n".join(log_lines))
-        log_box.markdown(
-            (
-                "<div style='max-height: 420px; overflow-y: auto; white-space: pre-wrap; "
-                "font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; "
-                "font-size: 0.88rem; line-height: 1.35; padding: 0.75rem 0.9rem; "
-                "border: 1px solid #e5e7eb; border-radius: 8px; background: #fafafa;'>"
-                f"{rendered}"
-                "</div>"
-            ),
-            unsafe_allow_html=True,
+    def refresh_logs() -> None:
+        _render_live_log_box(log_box, log_lines, empty_text="Preparazione scansione...")
+        _render_live_log_box(
+            rejected_log_box,
+            rejected_log_lines,
+            empty_text="Nessuno scarto AI ancora.",
         )
+
+    def append_log(message: str, *, dedupe: bool = True) -> None:
+        if dedupe and message in seen_progress_logs:
+            return
+        seen_progress_logs.add(message)
+        log_lines.append(message)
+        refresh_logs()
+
+    def append_rejected_log(message: str) -> None:
+        rejected_log_lines.append(message)
+        refresh_logs()
 
     def refresh_metrics() -> None:
         found_metric.metric("Trovati", totals["found"])
@@ -1023,21 +1177,31 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
     def on_progress(event: str, payload: dict) -> None:
         if event == "status":
             status_box.info(payload["message"])
-            append_log(payload["message"])
+            message = payload["message"]
+            noisy_fragments = (
+                "in esecuzione",
+                "ricerche web in coda",
+                "Analisi AI su",
+            )
+            if not any(fragment in message for fragment in noisy_fragments):
+                append_log(message)
+        elif event == "phase_done":
+            status_box.info(payload["message"])
+            append_log(f"COMPLETATO: {payload['message']}", dedupe=False)
         elif event == "agent_done":
             if payload.get("skipped"):
                 message = f"{payload['agent']}: saltato (modalità senza ricerche web)"
             else:
-                message = f"{payload['agent']}: {payload['count']} annunci"
+                message = f"{payload['agent']}: completato, {payload['count']} annunci"
             append_log(message)
             status_box.info(message)
         elif event == "startup_search":
             current = payload["current"]
             total = max(payload["total"], 1)
             progress_bar.progress(
-                current / total * 0.35,
+                current / total * 0.25,
                 text=(
-                    f"Ricerche web {current}/{total} · "
+                    f"Startup Discoverer {current}/{total} · "
                     f"{payload.get('items_found', 0)} risultati raccolti"
                 ),
             )
@@ -1046,15 +1210,62 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
                     f"Startup Discoverer: ricerca {current}/{total} "
                     f"({payload.get('items_found', 0)} risultati)"
                 )
+        elif event == "bigtech_search":
+            current = payload["current"]
+            total = max(payload["total"], 1)
+            progress_bar.progress(
+                current / total * 0.25,
+                text=(
+                    f"Big Tech Hunter {current}/{total} · "
+                    f"{payload.get('items_found', 0)} risultati raccolti"
+                ),
+            )
+            if current == 1 or current == total or current % 3 == 0:
+                append_log(
+                    f"Big Tech Hunter: ricerca {current}/{total} "
+                    f"({payload.get('items_found', 0)} risultati)"
+                )
+        elif event == "startup_processing":
+            current = payload["current"]
+            total = max(payload["total"], 1)
+            progress_bar.progress(
+                min(0.45, 0.25 + (current / total * 0.15)),
+                text=(
+                    f"Elaborazione Startup Discoverer {current}/{total} · "
+                    f"{payload.get('jobs_found', 0)} annunci normalizzati"
+                ),
+            )
+            if current == 1 or current == total or current % 10 == 0:
+                append_log(
+                    f"Startup Discoverer: elaborati {current}/{total} risultati web "
+                    f"({payload.get('jobs_found', 0)} annunci)"
+                )
+        elif event == "bigtech_processing":
+            current = payload["current"]
+            total = max(payload["total"], 1)
+            progress_bar.progress(
+                min(0.55, 0.4 + (current / total * 0.15)),
+                text=(
+                    f"Elaborazione Big Tech Hunter {current}/{total} · "
+                    f"{payload.get('jobs_found', 0)} annunci normalizzati"
+                ),
+            )
+            if current == 1 or current == total or current % 10 == 0:
+                append_log(
+                    f"Big Tech Hunter: elaborati {current}/{total} risultati web "
+                    f"({payload.get('jobs_found', 0)} annunci)"
+                )
         elif event == "summary":
             totals["found"] = payload["total_found"]
             totals["new"] = payload["new_jobs"]
             totals["eligible"] = payload.get("eligible_jobs", payload["new_jobs"])
             refresh_metrics()
             append_log(
-                f"Totale {payload['total_found']} | Nuovi {payload['new_jobs']} | "
-                f"Pre-filtrati {payload.get('prefilter_skipped', 0)} | "
-                f"Idonei per AI {payload.get('eligible_jobs', 0)}"
+                f"Riepilogo raccolta: {payload['total_found']} trovati, "
+                f"{payload['new_jobs']} nuovi, {payload.get('skipped_seen', 0)} già visti, "
+                f"{payload.get('prefilter_skipped', 0)} scartati dal pre-filtro, "
+                f"{payload.get('eligible_jobs', 0)} idonei per AI",
+                dedupe=False,
             )
         elif event == "analyzing":
             current = payload["current"]
@@ -1071,12 +1282,13 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
                 promoted=bool(payload.get("promoted")),
             )
             if rejection_line:
-                append_log(rejection_line)
+                append_rejected_log(rejection_line)
         elif event == "promoted":
             result = MatchResult.model_validate(payload["result"])
             live_matches.append(result)
             totals["promoted"] = len(live_matches)
             refresh_metrics()
+            append_log(_format_promoted_log(result), dedupe=False)
             st.session_state["live_matches"] = [
                 match.model_dump(mode="json") for match in live_matches
             ]
@@ -1098,21 +1310,28 @@ def _run_live_scan(profile: UserProfile, paths: ProfilePaths) -> ScanResult | No
         elif event == "companies_discovered":
             companies = payload.get("companies", [])
             if companies:
-                append_log("── Nuove aziende ATS aggiunte a Target Hunter ──")
+                append_log("Nuove aziende ATS aggiunte a Target Hunter:", dedupe=False)
                 for company in companies:
                     append_log(
-                        f"  {company.get('name')} ({company.get('ats')}/{company.get('slug')})"
+                        f"  - {company.get('name')} ({company.get('ats')}/{company.get('slug')})",
+                        dedupe=False,
                     )
         elif event == "search_providers":
             st.session_state["last_provider_stats"] = payload.get("stats", {})
         elif event == "complete":
             progress_bar.progress(1.0, text="Scansione completata")
             status_box.success("Scansione completata.")
-            append_log("Scansione completata.")
+            scan_result = ScanResult.model_validate(payload["scan_result"])
+            append_log(
+                f"Scansione completata: {scan_result.total_promoted} promossi su "
+                f"{scan_result.total_analyzed} analizzati AI.",
+                dedupe=False,
+            )
             if payload.get("provider_stats"):
                 st.session_state["last_provider_stats"] = payload["provider_stats"]
 
     refresh_metrics()
+    refresh_logs()
 
     try:
         with st.status("Scansione in corso...", expanded=True) as scan_status:
@@ -1165,9 +1384,9 @@ def render_saved_tab(paths: ProfilePaths) -> None:
         f"saved_sort_{paths.slug}",
     )
     if sort_mode == "match_desc":
-        applications = sorted(applications, key=lambda app: app.match.match_score, reverse=True)
+        applications = sorted(applications, key=lambda app: _effective_match_score(app.match), reverse=True)
     elif sort_mode == "match_asc":
-        applications = sorted(applications, key=lambda app: app.match.match_score)
+        applications = sorted(applications, key=lambda app: _effective_match_score(app.match))
     elif sort_mode == "salary_desc":
         applications = sorted(
             applications,
@@ -1253,7 +1472,7 @@ def render_history_tab(paths: ProfilePaths) -> None:
             )
         else:
             flat_matches.sort(
-                key=lambda item: item[0].match_score,
+                key=lambda item: _effective_match_score(item[0]),
                 reverse=layout_mode == "match_desc",
             )
         grouped_flat: dict[str, list[tuple[int, MatchResult, str]]] = {}

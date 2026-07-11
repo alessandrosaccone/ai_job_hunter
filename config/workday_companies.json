@@ -1,0 +1,232 @@
+[
+  {
+    "name": "NVIDIA",
+    "ats": "workday",
+    "slug": "NVIDIAExternalCareerSite",
+    "tenant": "nvidia",
+    "host": "nvidia.wd5.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "us",
+    "fields": ["tech"]
+  },
+  {
+    "name": "Intel",
+    "ats": "workday",
+    "slug": "External",
+    "tenant": "intel",
+    "host": "intel.wd1.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "us",
+    "fields": ["tech"]
+  },
+  {
+    "name": "Cisco",
+    "ats": "workday",
+    "slug": "Cisco_Careers",
+    "tenant": "cisco",
+    "host": "cisco.wd5.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "us",
+    "fields": ["tech"]
+  },
+  {
+    "name": "Micron",
+    "ats": "workday",
+    "slug": "External",
+    "tenant": "micron",
+    "host": "micron.wd1.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "us",
+    "fields": ["tech"]
+  },
+  {
+    "name": "Marvell",
+    "ats": "workday",
+    "slug": "marvellCareers",
+    "tenant": "marvell",
+    "host": "marvell.wd1.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "us",
+    "fields": ["tech"]
+  },
+  {
+    "name": "CrowdStrike",
+    "ats": "workday",
+    "slug": "crowdstrikeCareers",
+    "tenant": "crowdstrike",
+    "host": "crowdstrike.wd5.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "us",
+    "fields": ["tech"]
+  },
+  {
+    "name": "Adobe",
+    "ats": "workday",
+    "slug": "external_experienced",
+    "tenant": "adobe",
+    "host": "adobe.wd5.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "us",
+    "fields": ["tech", "design", "sales"]
+  },
+  {
+    "name": "Salesforce",
+    "ats": "workday",
+    "slug": "External_Career_Site",
+    "tenant": "salesforce",
+    "host": "salesforce.wd12.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "us",
+    "fields": ["tech", "sales", "management"]
+  },
+  {
+    "name": "Autodesk",
+    "ats": "workday",
+    "slug": "Ext",
+    "tenant": "autodesk",
+    "host": "autodesk.wd1.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "us",
+    "fields": ["tech", "design"]
+  },
+  {
+    "name": "Applied Materials",
+    "ats": "workday",
+    "slug": "External",
+    "tenant": "amat",
+    "host": "amat.wd1.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "us",
+    "fields": ["tech"]
+  },
+  {
+    "name": "Workday",
+    "ats": "workday",
+    "slug": "Workday",
+    "tenant": "workday",
+    "host": "workday.wd5.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "us",
+    "fields": ["tech"]
+  },
+  {
+    "name": "Visa",
+    "ats": "workday",
+    "slug": "Visa",
+    "tenant": "visa",
+    "host": "visa.wd5.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "us",
+    "fields": ["finance", "sales"]
+  },
+  {
+    "name": "Abbott",
+    "ats": "workday",
+    "slug": "AbbottCareers",
+    "tenant": "abbott",
+    "host": "abbott.wd5.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "us",
+    "fields": ["operations", "finance"]
+  },
+  {
+    "name": "Medtronic",
+    "ats": "workday",
+    "slug": "MedtronicCareers",
+    "tenant": "medtronic",
+    "host": "medtronic.wd1.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "us",
+    "fields": ["operations", "tech"]
+  },
+  {
+    "name": "Pfizer",
+    "ats": "workday",
+    "slug": "PfizerCareers",
+    "tenant": "pfizer",
+    "host": "pfizer.wd1.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "us",
+    "fields": ["operations", "finance"]
+  },
+  {
+    "name": "GSK",
+    "ats": "workday",
+    "slug": "GSKCareers",
+    "tenant": "gsk",
+    "host": "gsk.wd5.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "eu",
+    "fields": ["operations", "finance"]
+  },
+  {
+    "name": "AstraZeneca",
+    "ats": "workday",
+    "slug": "Careers",
+    "tenant": "astrazeneca",
+    "host": "astrazeneca.wd3.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "eu",
+    "fields": ["operations", "finance"]
+  },
+  {
+    "name": "Thales",
+    "ats": "workday",
+    "slug": "Careers",
+    "tenant": "thales",
+    "host": "thales.wd3.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "eu",
+    "fields": ["tech", "operations", "management", "import_export"]
+  },
+  {
+    "name": "Leonardo",
+    "ats": "workday",
+    "slug": "LeonardoCareerSite",
+    "tenant": "leonardocompany",
+    "host": "leonardocompany.wd3.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "eu",
+    "fields": ["tech", "operations", "management", "import_export"]
+  },
+  {
+    "name": "Airbus",
+    "ats": "workday",
+    "slug": "Airbus",
+    "tenant": "ag",
+    "host": "ag.wd3.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "eu",
+    "fields": ["tech", "operations", "management", "import_export"]
+  },
+  {
+    "name": "Shell",
+    "ats": "workday",
+    "slug": "shellCareers",
+    "tenant": "shell",
+    "host": "shell.wd3.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "eu",
+    "fields": ["operations", "finance", "import_export"]
+  },
+  {
+    "name": "Repsol",
+    "ats": "workday",
+    "slug": "repsol",
+    "tenant": "repsol",
+    "host": "repsol.wd3.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "eu",
+    "fields": ["operations", "finance", "import_export"]
+  },
+  {
+    "name": "Accenture",
+    "ats": "workday",
+    "slug": "AccentureCareers",
+    "tenant": "accenture",
+    "host": "accenture.wd103.myworkdayjobs.com",
+    "locale": "en-US",
+    "region": "us",
+    "fields": ["management", "tech", "operations", "sales"]
+  }
+]

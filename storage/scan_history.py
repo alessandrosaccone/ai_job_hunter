@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from models.job import ScanResult
+from models.job import MatchResult, ScanResult
 from storage.memory import JobMemory
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,11 @@ ITALIAN_MONTHS = [
     "novembre",
     "dicembre",
 ]
+
+
+def _effective_match_score(result: MatchResult) -> float:
+    manual_score = getattr(result, "manual_match_score", None)
+    return manual_score if manual_score is not None else result.match_score
 
 
 def format_italian_date(day: date) -> str:
@@ -76,6 +81,38 @@ class ScanHistoryStore:
             return
         self.scans.append(scan)
         self.save()
+
+    def update_match(self, result: MatchResult, *, threshold: float = 7) -> bool:
+        key = result.job.dedup_key.lower()
+        updated = False
+        next_scans: list[ScanResult] = []
+        for scan in self.scans:
+            next_matches: list[MatchResult] = []
+            scan_updated = False
+            for match in scan.matches:
+                if match.job.dedup_key.lower() == key:
+                    next_matches.append(result)
+                    scan_updated = True
+                    updated = True
+                else:
+                    next_matches.append(match)
+            if scan_updated:
+                next_matches.sort(key=_effective_match_score, reverse=True)
+                scan = scan.model_copy(
+                    update={
+                        "matches": next_matches,
+                        "total_promoted": sum(
+                            1
+                            for match in next_matches
+                            if match.approved and _effective_match_score(match) >= threshold
+                        ),
+                    },
+                )
+            next_scans.append(scan)
+        if updated:
+            self.scans = next_scans
+            self.save()
+        return updated
 
     def total_matches(self) -> int:
         return sum(len(scan.matches) for scan in self.scans)

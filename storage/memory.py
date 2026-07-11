@@ -55,3 +55,14 @@ class JobMemory:
     def save_match(self, result: MatchResult) -> None:
         self.notified_matches.append(result)
         self.mark_seen(result.job.dedup_key)
+
+    def update_match(self, result: MatchResult) -> bool:
+        key = result.job.dedup_key.lower()
+        updated = False
+        for index, match in enumerate(self.notified_matches):
+            if match.job.dedup_key.lower() == key:
+                self.notified_matches[index] = result
+                updated = True
+        if updated:
+            self.save()
+        return updated

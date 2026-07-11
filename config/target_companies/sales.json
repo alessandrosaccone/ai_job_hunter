@@ -1,0 +1,72 @@
+[
+  {
+    "name": "6sense",
+    "ats": "greenhouse",
+    "slug": "6sense",
+    "region": "us",
+    "fields": ["sales"]
+  },
+  {
+    "name": "Apollo.io",
+    "ats": "greenhouse",
+    "slug": "apolloio",
+    "region": "us",
+    "fields": ["sales"]
+  },
+  {
+    "name": "Braze",
+    "ats": "greenhouse",
+    "slug": "braze",
+    "region": "us",
+    "fields": ["sales"]
+  },
+  {
+    "name": "Cognism",
+    "ats": "greenhouse",
+    "slug": "cognism",
+    "region": "us",
+    "fields": ["sales"]
+  },
+  {
+    "name": "Contentsquare",
+    "ats": "lever",
+    "slug": "contentsquare",
+    "region": "us",
+    "fields": ["sales"]
+  },
+  {
+    "name": "Glean",
+    "ats": "greenhouse",
+    "slug": "gleanwork",
+    "region": "us",
+    "fields": ["sales"]
+  },
+  {
+    "name": "Iterable",
+    "ats": "greenhouse",
+    "slug": "iterable",
+    "region": "us",
+    "fields": ["sales"]
+  },
+  {
+    "name": "Klaviyo",
+    "ats": "greenhouse",
+    "slug": "klaviyo",
+    "region": "us",
+    "fields": ["sales"]
+  },
+  {
+    "name": "Salesloft",
+    "ats": "greenhouse",
+    "slug": "salesloft",
+    "region": "us",
+    "fields": ["sales"]
+  },
+  {
+    "name": "Yotpo",
+    "ats": "greenhouse",
+    "slug": "yotpo",
+    "region": "us",
+    "fields": ["sales"]
+  }
+]

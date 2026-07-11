@@ -1,0 +1,86 @@
+[
+  {
+    "name": "Google",
+    "aliases": ["Alphabet"],
+    "career_domains": ["careers.google.com", "jobs.google.com"]
+  },
+  {
+    "name": "IBM",
+    "aliases": ["International Business Machines"],
+    "career_domains": ["careers.ibm.com"]
+  },
+  {
+    "name": "Microsoft",
+    "career_domains": ["careers.microsoft.com"]
+  },
+  {
+    "name": "Meta",
+    "aliases": ["Facebook"],
+    "career_domains": ["metacareers.com", "careers.meta.com"]
+  },
+  {
+    "name": "Amazon",
+    "aliases": ["AWS"],
+    "career_domains": ["amazon.jobs", "www.amazon.jobs"]
+  },
+  {
+    "name": "Apple",
+    "career_domains": ["jobs.apple.com"]
+  },
+  {
+    "name": "NVIDIA",
+    "career_domains": ["nvidia.wd5.myworkdayjobs.com", "jobs.nvidia.com"]
+  },
+  {
+    "name": "Intel",
+    "career_domains": ["jobs.intel.com"]
+  },
+  {
+    "name": "AMD",
+    "career_domains": ["careers.amd.com"]
+  },
+  {
+    "name": "Oracle",
+    "career_domains": ["careers.oracle.com"]
+  },
+  {
+    "name": "Salesforce",
+    "career_domains": ["careers.salesforce.com"]
+  },
+  {
+    "name": "Adobe",
+    "career_domains": ["careers.adobe.com"]
+  },
+  {
+    "name": "Cisco",
+    "career_domains": ["jobs.cisco.com"]
+  },
+  {
+    "name": "SAP",
+    "career_domains": ["jobs.sap.com"]
+  },
+  {
+    "name": "Netflix",
+    "career_domains": ["jobs.netflix.com", "explore.jobs.netflix.net"]
+  },
+  {
+    "name": "Tesla",
+    "career_domains": ["tesla.com"]
+  },
+  {
+    "name": "Snowflake",
+    "career_domains": ["careers.snowflake.com"]
+  },
+  {
+    "name": "ServiceNow",
+    "career_domains": ["careers.servicenow.com"]
+  },
+  {
+    "name": "Qualcomm",
+    "career_domains": ["careers.qualcomm.com"]
+  },
+  {
+    "name": "Uber",
+    "career_domains": ["uber.com"]
+  }
+]

@@ -40,6 +40,7 @@ class JobPosting(BaseModel):
 class MatchResult(BaseModel):
     job: JobPosting
     match_score: float = Field(ge=0, le=10)
+    manual_match_score: float | None = Field(default=None, ge=0, le=10)
     approved: bool
     reasoning: str
     salary_indicated: bool = True
@@ -48,6 +49,19 @@ class MatchResult(BaseModel):
     application_channel: ApplicationChannel = "unknown"
     cv_strategy: str | None = None
     matched_with_full_description: bool = False
+
+    @field_validator("job", mode="before")
+    @classmethod
+    def normalize_job(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return value
+        if hasattr(value, "model_dump"):
+            return value.model_dump(mode="json")
+        return value
+
+    @property
+    def effective_match_score(self) -> float:
+        return self.manual_match_score if self.manual_match_score is not None else self.match_score
 
 
 class ScanResult(BaseModel):

@@ -1,0 +1,72 @@
+[
+  {
+    "name": "Airtable",
+    "ats": "greenhouse",
+    "slug": "airtable",
+    "region": "us",
+    "fields": ["management"]
+  },
+  {
+    "name": "Amplitude",
+    "ats": "greenhouse",
+    "slug": "amplitude",
+    "region": "us",
+    "fields": ["management"]
+  },
+  {
+    "name": "Brex",
+    "ats": "greenhouse",
+    "slug": "brex",
+    "region": "us",
+    "fields": ["management"]
+  },
+  {
+    "name": "Celonis",
+    "ats": "greenhouse",
+    "slug": "celonis",
+    "region": "us",
+    "fields": ["management"]
+  },
+  {
+    "name": "Culture Amp",
+    "ats": "greenhouse",
+    "slug": "cultureamp",
+    "region": "us",
+    "fields": ["management"]
+  },
+  {
+    "name": "Figma",
+    "ats": "greenhouse",
+    "slug": "figma",
+    "region": "us",
+    "fields": ["management"]
+  },
+  {
+    "name": "Intercom",
+    "ats": "greenhouse",
+    "slug": "intercom",
+    "region": "us",
+    "fields": ["management"]
+  },
+  {
+    "name": "Miro",
+    "ats": "greenhouse",
+    "slug": "realtimeboardglobal",
+    "region": "us",
+    "fields": ["management"]
+  },
+  {
+    "name": "Palantir",
+    "ats": "lever",
+    "slug": "palantir",
+    "region": "us",
+    "fields": ["management"]
+  },
+  {
+    "name": "Remote",
+    "ats": "greenhouse",
+    "slug": "remotecom",
+    "region": "us",
+    "fields": ["management"]
+  }
+]

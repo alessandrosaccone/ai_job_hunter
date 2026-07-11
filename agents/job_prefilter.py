@@ -121,7 +121,7 @@ def _experience_level_matches(job: JobPosting, profile: UserProfile) -> bool:
 
 
 def _parse_amount(raw: str) -> int | None:
-    cleaned = raw.lower().replace(",", "").replace(".", "").strip()
+    cleaned = raw.lower().replace(",", "").replace(".", "").replace(" ", "").strip()
     if not cleaned:
         return None
     if cleaned.endswith("k"):
@@ -141,9 +141,12 @@ def _extract_salary_range(text: str) -> tuple[int, int] | None:
         return None
 
     normalized = text.replace("€", " EUR ").replace("eur", " EUR ")
+    currency = r"(?:EUR|USD|\$|€)?"
+    amount = r"(\d{1,3}\s*[kK]|\d{2,3}(?:[.,]\d{3})?)"
     range_match = re.search(
-        r"(\d{1,3}[kK]|\d{2,3}[.,]?\d{3})\s*(?:-|to|–|—)\s*(\d{1,3}[kK]|\d{2,3}[.,]?\d{3})",
+        rf"{currency}\s*{amount}\s*(?:-|to|–|—)\s*{currency}\s*{amount}",
         normalized,
+        flags=re.I,
     )
     if range_match:
         low = _parse_amount(range_match.group(1))
@@ -162,7 +165,7 @@ def _extract_salary_range(text: str) -> tuple[int, int] | None:
             return parsed, parsed
 
     up_to_match = re.search(
-        r"(?:up to|fino a|jusqu'à)\s*(?:USD|\$|€|EUR)?\s*(\d{1,3}[kK]|\d{2,3}(?:[.,]\d{3})?)",
+        r"(?:up to|fino a|jusqu'à)\s*(?:USD|\$|€|EUR)?\s*(\d{1,3}\s*[kK]|\d{2,3}(?:[.,]\d{3})?)",
         normalized,
         flags=re.I,
     )
@@ -172,7 +175,7 @@ def _extract_salary_range(text: str) -> tuple[int, int] | None:
             return parsed, parsed
 
     amounts: list[int] = []
-    for token in re.findall(r"\d{1,3}[kK]|\d{2,3}[.,]\d{3}", normalized):
+    for token in re.findall(r"\d{1,3}\s*[kK]|\d{2,3}[.,]\d{3}", normalized):
         parsed = _parse_amount(token)
         if parsed and 10_000 <= parsed <= 350_000:
             amounts.append(parsed)
@@ -205,8 +208,8 @@ def extract_posting_salary_hint(text: str) -> str | None:
         return None
 
     patterns = (
-        r"(?:RAL|salary|stipendio|retribuzione|compensation)[^\.]{0,180}?(\d{1,3}[.,]?\d{3}|\d{2,3}[kK])\s*(?:-|to|–|—)\s*(\d{1,3}[.,]?\d{3}|\d{2,3}[kK])",
-        r"(\d{1,3}[.,]?\d{3}|\d{2,3}[kK])\s*(?:-|to|–|—)\s*(\d{1,3}[.,]?\d{3}|\d{2,3}[kK])[^\.]{0,60}(?:EUR|€|RAL|annual|annuo|lordo)",
+        r"(?:RAL|salary|stipendio|retribuzione|compensation|gross annual|gross salary)[^\.]{0,180}?(?:EUR|USD|\$|€)?\s*(\d{1,3}[.,]?\d{3}|\d{2,3}\s*[kK])\s*(?:-|to|–|—)\s*(?:EUR|USD|\$|€)?\s*(\d{1,3}[.,]?\d{3}|\d{2,3}\s*[kK])",
+        r"(?:EUR|USD|\$|€)?\s*(\d{1,3}[.,]?\d{3}|\d{2,3}\s*[kK])\s*(?:-|to|–|—)\s*(?:EUR|USD|\$|€)?\s*(\d{1,3}[.,]?\d{3}|\d{2,3}\s*[kK])[^\.]{0,80}(?:EUR|€|RAL|annual|annuo|lordo|gross)",
     )
     for pattern in patterns:
         match = re.search(pattern, cleaned, flags=re.I)

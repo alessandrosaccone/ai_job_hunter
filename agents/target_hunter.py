@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -10,6 +9,7 @@ import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from agents.base import BaseAgent
+from agents.company_config import company_storage_key, load_target_companies
 from agents.job_prefilter import _experience_level_matches
 from models.job import JobPosting
 from models.user_profile import UserProfile
@@ -20,6 +20,9 @@ DEFAULT_COMPANIES_PATH = Path("config/target_companies.json")
 LEVER_US_BASE = "https://api.lever.co/v0/postings"
 LEVER_EU_BASE = "https://api.eu.lever.co/v0/postings"
 GREENHOUSE_BASE = "https://boards-api.greenhouse.io/v1/boards"
+WORKDAY_DEFAULT_LOCALE = "en-US"
+WORKDAY_PAGE_SIZE = 20
+WORKDAY_MAX_JOBS = 200
 
 
 class TargetHunter(BaseAgent):
@@ -41,22 +44,20 @@ class TargetHunter(BaseAgent):
         *,
         discovered_companies: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
-        static_companies: list[dict[str, Any]] = []
-        if self.companies_path.exists():
-            with self.companies_path.open(encoding="utf-8") as handle:
-                static_companies = json.load(handle)
+        static_companies = load_target_companies(
+            self.companies_path,
+            career_field=profile.career_field,
+        )
 
         merged: dict[str, dict[str, Any]] = {}
         for company in static_companies:
             if profile.career_field in company.get("fields", ["tech"]):
-                key = f"{company.get('ats', '').lower()}:{company.get('slug', '').lower()}"
-                merged[key] = company
+                merged[company_storage_key(company)] = company
 
         for company in discovered_companies or []:
             if profile.career_field not in company.get("fields", ["tech"]):
                 continue
-            key = f"{company.get('ats', '').lower()}:{company.get('slug', '').lower()}"
-            merged.setdefault(key, company)
+            merged.setdefault(company_storage_key(company), company)
 
         return list(merged.values())
 
@@ -69,14 +70,11 @@ class TargetHunter(BaseAgent):
     ) -> list[JobPosting]:
         companies = self._load_companies(profile, discovered_companies=discovered_companies)
         if extra_companies:
-            known = {
-                f"{company.get('ats', '').lower()}:{company.get('slug', '').lower()}"
-                for company in companies
-            }
+            known = {company_storage_key(company) for company in companies}
             for company in extra_companies:
                 if profile.career_field not in company.get("fields", ["tech"]):
                     continue
-                key = f"{company.get('ats', '').lower()}:{company.get('slug', '').lower()}"
+                key = company_storage_key(company)
                 if key not in known:
                     companies.append(company)
                     known.add(key)
@@ -123,7 +121,7 @@ class TargetHunter(BaseAgent):
             name = company.get("name", slug)
             region = company.get("region", "us").lower()
 
-            if not slug:
+            if not slug and ats != "workday":
                 return []
 
             try:
@@ -133,6 +131,9 @@ class TargetHunter(BaseAgent):
                 elif ats == "greenhouse":
                     raw_jobs = await self._fetch_greenhouse_jobs(client, slug)
                     jobs = [self._normalize_greenhouse_job(item, name) for item in raw_jobs]
+                elif ats == "workday":
+                    raw_jobs = await self._fetch_workday_jobs(client, company)
+                    jobs = [self._normalize_workday_job(item, name, company) for item in raw_jobs]
                 else:
                     logger.warning("[TargetHunter] Unsupported ATS '%s' for %s", ats, name)
                     return []
@@ -184,6 +185,10 @@ class TargetHunter(BaseAgent):
             response = await client.get(f"{GREENHOUSE_BASE}/{slug}/jobs?content=true")
             return response.status_code == 200
 
+        if ats == "workday":
+            jobs = await self._fetch_workday_jobs(client, company, limit=1)
+            return bool(jobs)
+
         return False
 
     async def _fetch_lever_jobs(
@@ -207,6 +212,66 @@ class TargetHunter(BaseAgent):
             return []
         jobs = payload.get("jobs", [])
         return jobs if isinstance(jobs, list) else []
+
+    def _workday_config(self, company: dict[str, Any]) -> dict[str, str]:
+        return {
+            "host": str(company.get("host", "")).strip(),
+            "tenant": str(company.get("tenant", "")).strip(),
+            "site": str(company.get("slug", "")).strip(),
+            "locale": str(company.get("locale", WORKDAY_DEFAULT_LOCALE)).strip() or WORKDAY_DEFAULT_LOCALE,
+        }
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=1, max=4),
+        retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+    )
+    async def _fetch_workday_jobs(
+        self,
+        client: httpx.AsyncClient,
+        company: dict[str, Any],
+        *,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        cfg = self._workday_config(company)
+        if not cfg["host"] or not cfg["tenant"] or not cfg["site"]:
+            return []
+
+        url = f"https://{cfg['host']}/wday/cxs/{cfg['tenant']}/{cfg['site']}/jobs"
+        page_size = limit or WORKDAY_PAGE_SIZE
+        max_jobs = limit or WORKDAY_MAX_JOBS
+        collected: list[dict[str, Any]] = []
+        offset = 0
+
+        while offset < max_jobs:
+            response = await client.post(
+                url,
+                json={
+                    "appliedFacets": {},
+                    "limit": min(page_size, max_jobs - offset),
+                    "offset": offset,
+                    "searchText": "",
+                },
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+            )
+            if response.status_code == 404:
+                break
+            response.raise_for_status()
+            payload = response.json()
+            batch = payload.get("jobPostings", [])
+            if not isinstance(batch, list) or not batch:
+                break
+            collected.extend(batch)
+            total = int(payload.get("total", len(collected)))
+            offset += len(batch)
+            if limit is not None or offset >= total or len(batch) < page_size:
+                break
+
+        return collected
 
     def _matches_keywords(self, job: JobPosting, keywords: list[str]) -> bool:
         haystack = f"{job.title} {job.description}".lower()
@@ -246,6 +311,41 @@ class TargetHunter(BaseAgent):
             source="greenhouse",
             location=location,
             description=self._strip_html(item.get("content", "")),
+            salary_hint=None,
+            work_mode_hint=None,
+            raw_metadata=item,
+        )
+
+    def _normalize_workday_job(
+        self,
+        item: dict[str, Any],
+        company_name: str,
+        company: dict[str, Any],
+    ) -> JobPosting:
+        cfg = self._workday_config(company)
+        external_path = str(item.get("externalPath", ""))
+        absolute_url = f"https://{cfg['host']}/{cfg['locale']}/{cfg['site']}{external_path}"
+        bullet_fields = item.get("bulletFields", [])
+        posting_id = bullet_fields[0] if isinstance(bullet_fields, list) and bullet_fields else external_path
+        location = str(item.get("locationsText", ""))
+        description = "\n".join(
+            part
+            for part in (
+                item.get("title", ""),
+                location,
+                item.get("postedOn", ""),
+            )
+            if part
+        )
+
+        return JobPosting(
+            id=str(posting_id or absolute_url),
+            title=item.get("title", "Unknown role"),
+            company=company_name,
+            url=absolute_url,
+            source="workday",
+            location=location,
+            description=description,
             salary_hint=None,
             work_mode_hint=None,
             raw_metadata=item,
